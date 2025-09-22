@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/flaboy/aira/aira-shop/pkg/importer/types"
+	"github.com/flaboy/aira-shop/pkg/importer/types"
 )
 
 // analyzeFormat 分析格式结构，提取所有字段信息

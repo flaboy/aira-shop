@@ -1,11 +1,11 @@
 package commence
 
 import (
-	"github.com/flaboy/aira/aira-shop/pkg/config"
-	"github.com/flaboy/aira/aira-shop/pkg/events"
-	"github.com/flaboy/aira/aira-shop/pkg/extensions/payment"
-	"github.com/flaboy/aira/aira-shop/pkg/extensions/shoplink"
-	"github.com/flaboy/aira/aira-shop/pkg/extensions/tracking"
+	"github.com/flaboy/aira-shop/pkg/config"
+	"github.com/flaboy/aira-shop/pkg/events"
+	"github.com/flaboy/aira-shop/pkg/extensions/payment"
+	"github.com/flaboy/aira-shop/pkg/extensions/shoplink"
+	"github.com/flaboy/aira-shop/pkg/extensions/tracking"
 )
 
 func Start(cfg *config.CommenceConfig) error {

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/flaboy/aira/aira-core/pkg/database"
-	"github.com/flaboy/aira/aira-shop/pkg/addon"
+	"github.com/flaboy/aira-core/pkg/database"
+	"github.com/flaboy/aira-shop/pkg/addon"
 
 	"gorm.io/gorm"
 )

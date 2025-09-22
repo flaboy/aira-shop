@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flaboy/aira/aira-shop/pkg/extensions/tracking/utils"
+	"github.com/flaboy/aira-shop/pkg/extensions/tracking/utils"
 
 	"github.com/flaboy/pin"
 )

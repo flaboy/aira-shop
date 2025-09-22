@@ -5,10 +5,10 @@ import (
 	"log"
 	"time"
 
-	"github.com/flaboy/aira/aira-core/pkg/hashid"
-	"github.com/flaboy/aira/aira-shop/pkg/events"
-	"github.com/flaboy/aira/aira-shop/pkg/models"
-	"github.com/flaboy/aira/aira-shop/pkg/types"
+	"github.com/flaboy/aira-core/pkg/hashid"
+	"github.com/flaboy/aira-shop/pkg/events"
+	"github.com/flaboy/aira-shop/pkg/models"
+	"github.com/flaboy/aira-shop/pkg/types"
 	"github.com/shopspring/decimal"
 
 	"gorm.io/gorm"

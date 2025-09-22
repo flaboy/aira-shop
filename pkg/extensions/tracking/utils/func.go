@@ -3,7 +3,7 @@ package utils
 import (
 	"log"
 
-	"github.com/flaboy/aira/aira-web/pkg/helper"
+	"github.com/flaboy/aira-web/pkg/helper"
 )
 
 func GetPublicUrl(provider, path string) string {

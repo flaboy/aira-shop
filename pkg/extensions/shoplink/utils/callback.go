@@ -3,8 +3,8 @@ package utils
 import (
 	"encoding/json"
 
-	"github.com/flaboy/aira/aira-core/pkg/hashid"
-	"github.com/flaboy/aira/aira-web/pkg/helper"
+	"github.com/flaboy/aira-core/pkg/hashid"
+	"github.com/flaboy/aira-web/pkg/helper"
 )
 
 var (

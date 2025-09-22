@@ -1,6 +1,6 @@
 package events
 
-import "github.com/flaboy/aira/aira-shop/pkg/types"
+import "github.com/flaboy/aira-shop/pkg/types"
 
 type EventHandler interface {
 	OnShopConnected(event *types.ShopConnectedEvent) error

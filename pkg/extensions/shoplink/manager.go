@@ -3,9 +3,9 @@ package shoplink
 import (
 	"encoding/json"
 
-	"github.com/flaboy/aira/aira-core/pkg/database"
-	"github.com/flaboy/aira/aira-shop/pkg/extensions/shoplink/shopify"
-	"github.com/flaboy/aira/aira-shop/pkg/models"
+	"github.com/flaboy/aira-core/pkg/database"
+	"github.com/flaboy/aira-shop/pkg/extensions/shoplink/shopify"
+	"github.com/flaboy/aira-shop/pkg/models"
 	"gorm.io/gorm"
 )
 

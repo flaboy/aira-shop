@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/flaboy/aira/aira-core/pkg/database"
-	"github.com/flaboy/aira/aira-shop/pkg/extensions/payment/types"
-	"github.com/flaboy/aira/aira-shop/pkg/extensions/payment/utils"
-	"github.com/flaboy/aira/aira-shop/pkg/models"
+	"github.com/flaboy/aira-core/pkg/database"
+	"github.com/flaboy/aira-shop/pkg/extensions/payment/types"
+	"github.com/flaboy/aira-shop/pkg/extensions/payment/utils"
+	"github.com/flaboy/aira-shop/pkg/models"
 )
 
 // PaymentManager 支付管理器

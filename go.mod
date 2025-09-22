@@ -1,4 +1,4 @@
-module github.com/flaboy/aira/aira-shop
+module github.com/flaboy/aira-shop
 
 go 1.24.4
 
@@ -8,8 +8,8 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.17.69
 	github.com/aws/aws-sdk-go-v2/service/sqs v1.38.7
 	github.com/bold-commerce/go-shopify/v4 v4.7.0
-	github.com/flaboy/aira/aira-core v0.0.0
-	github.com/flaboy/aira/aira-web v0.0.0-00010101000000-000000000000
+	github.com/flaboy/aira-core v0.0.0
+	github.com/flaboy/aira-web v0.0.0-00010101000000-000000000000
 	github.com/flaboy/pin v0.9.8
 	github.com/plutov/paypal/v4 v4.14.0
 	github.com/shopspring/decimal v0.0.0-20200105231215-408a2507e114
@@ -76,6 +76,6 @@ require (
 	gorm.io/driver/mysql v1.6.0 // indirect
 )
 
-replace github.com/flaboy/aira/aira-core => ../aira-core
+replace github.com/flaboy/aira-core => ../aira-core
 
-replace github.com/flaboy/aira/aira-web => ../aira-web
+replace github.com/flaboy/aira-web => ../aira-web

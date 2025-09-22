@@ -3,8 +3,8 @@ package addon
 import (
 	"fmt"
 
-	"github.com/flaboy/aira/aira-web/pkg/config"
-	"github.com/flaboy/aira/aira-web/pkg/migration"
+	"github.com/flaboy/aira-web/pkg/config"
+	"github.com/flaboy/aira-web/pkg/migration"
 	"gorm.io/gorm"
 )
 

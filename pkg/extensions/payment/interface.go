@@ -1,8 +1,8 @@
 package payment
 
 import (
-	"github.com/flaboy/aira/aira-shop/pkg/extensions/payment/paypal"
-	"github.com/flaboy/aira/aira-shop/pkg/extensions/payment/types"
+	"github.com/flaboy/aira-shop/pkg/extensions/payment/paypal"
+	"github.com/flaboy/aira-shop/pkg/extensions/payment/types"
 	"github.com/flaboy/pin"
 )
 

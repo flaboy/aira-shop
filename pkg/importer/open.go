@@ -13,7 +13,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/flaboy/aira/aira-shop/pkg/importer/types"
+	"github.com/flaboy/aira-shop/pkg/importer/types"
 
 	"github.com/xuri/excelize/v2"
 )

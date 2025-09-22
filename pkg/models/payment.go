@@ -3,7 +3,7 @@ package models
 import (
 	"time"
 
-	"github.com/flaboy/aira/aira-web/pkg/migration"
+	"github.com/flaboy/aira-web/pkg/migration"
 )
 
 type PaymentRecord struct {

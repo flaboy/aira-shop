@@ -1,8 +1,8 @@
 package utils
 
 import (
-	"github.com/flaboy/aira/aira-core/pkg/database"
-	"github.com/flaboy/aira/aira-shop/pkg/models"
+	"github.com/flaboy/aira-core/pkg/database"
+	"github.com/flaboy/aira-shop/pkg/models"
 )
 
 func GetShopProduct(platform string, outerID string) (*models.ShopProduct, bool, error) {

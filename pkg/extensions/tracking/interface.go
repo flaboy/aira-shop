@@ -4,8 +4,8 @@ import (
 	"errors"
 	"regexp"
 
-	"github.com/flaboy/aira/aira-shop/pkg/extensions/tracking/the17track"
-	"github.com/flaboy/aira/aira-shop/pkg/extensions/tracking/utils"
+	"github.com/flaboy/aira-shop/pkg/extensions/tracking/the17track"
+	"github.com/flaboy/aira-shop/pkg/extensions/tracking/utils"
 )
 
 type TrackRoute struct {

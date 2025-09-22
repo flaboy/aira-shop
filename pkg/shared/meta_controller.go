@@ -1,11 +1,11 @@
 package shared
 
 import (
-	"github.com/flaboy/aira/aira-core/pkg/database"
-	"github.com/flaboy/aira/aira-shop/pkg/addon"
-	"github.com/flaboy/aira/aira-shop/pkg/metadata"
-	"github.com/flaboy/aira/aira-web/pkg/crud"
-	"github.com/flaboy/aira/aira-web/pkg/routes"
+	"github.com/flaboy/aira-core/pkg/database"
+	"github.com/flaboy/aira-shop/pkg/addon"
+	"github.com/flaboy/aira-shop/pkg/metadata"
+	"github.com/flaboy/aira-web/pkg/crud"
+	"github.com/flaboy/aira-web/pkg/routes"
 
 	"github.com/flaboy/pin"
 	"github.com/flaboy/pin/usererrors"

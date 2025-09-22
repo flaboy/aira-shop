@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/flaboy/aira/aira-web/pkg/migration"
+	"github.com/flaboy/aira-web/pkg/migration"
 )
 
 type ShopProduct struct {

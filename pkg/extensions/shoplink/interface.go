@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net/url"
 
-	"github.com/flaboy/aira/aira-shop/pkg/types"
+	"github.com/flaboy/aira-shop/pkg/types"
 	"github.com/flaboy/pin"
 )
 

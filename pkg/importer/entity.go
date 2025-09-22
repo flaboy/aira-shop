@@ -1,6 +1,6 @@
 package importer
 
-import "github.com/flaboy/aira/aira-shop/pkg/importer/types"
+import "github.com/flaboy/aira-shop/pkg/importer/types"
 
 type FileType string
 

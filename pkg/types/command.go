@@ -1,7 +1,7 @@
 package types
 
 import (
-	"github.com/flaboy/aira/aira-shop/pkg/models"
+	"github.com/flaboy/aira-shop/pkg/models"
 	"github.com/shopspring/decimal"
 )
 

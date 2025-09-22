@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flaboy/aira/aira-shop/pkg/config"
-	"github.com/flaboy/aira/aira-shop/pkg/extensions/tracking/utils"
+	"github.com/flaboy/aira-shop/pkg/config"
+	"github.com/flaboy/aira-shop/pkg/extensions/tracking/utils"
 
 	"github.com/flaboy/pin"
 	"github.com/valyala/fasthttp"
