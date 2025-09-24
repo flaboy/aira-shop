@@ -2,7 +2,7 @@ package usps
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -21,8 +21,8 @@ func (u *USPS) Init() error {
 }
 
 func (u *USPS) StartTracking(trackingNumber string) error {
-	log.Println("Starting USPS tracking for:", trackingNumber)
-	log.Println(utils.GetPublicUrl("usps", "/webhook"))
+	slog.Info("Starting USPS tracking", "trackingNumber", trackingNumber)
+	slog.Info("USPS webhook URL", "url", utils.GetPublicUrl("usps", "/webhook"))
 	return nil
 }
 

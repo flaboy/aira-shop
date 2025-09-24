@@ -2,7 +2,7 @@ package utils
 
 import (
 	"encoding/json"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/flaboy/aira-core/pkg/hashid"
@@ -47,8 +47,7 @@ func ConvertIntToDecemel(v int64) *decimal.Decimal {
 // NotifyBusinessSystem 通知业务系统支付已完成
 // tx 为当前事务，如果传入nil则使用新事务
 func NotifyBusinessSystem(tx *gorm.DB, paymentRecord *models.PaymentRecord) error {
-	log.Printf("[NotifyBusinessSystem] Starting notification - PaymentID: %d, Amount: %d",
-		paymentRecord.ID, paymentRecord.Amount)
+	slog.Info("[NotifyBusinessSystem] Starting notification", "paymentID", paymentRecord.ID, "amount", paymentRecord.Amount)
 
 	// 将业务上下文反序列化为JSON格式的RawMessage
 	var businessContextJSON json.RawMessage
@@ -67,7 +66,7 @@ func NotifyBusinessSystem(tx *gorm.DB, paymentRecord *models.PaymentRecord) erro
 		BusinessContext: businessContextJSON,
 	}
 
-	log.Printf("[NotifyBusinessSystem] Created event with amount: %s", event.Amount.String())
+	slog.Info("[NotifyBusinessSystem] Created event", "amount", event.Amount.String())
 
 	// 设置完成时间
 	if paymentRecord.CompletedAt != nil {

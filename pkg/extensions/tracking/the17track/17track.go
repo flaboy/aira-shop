@@ -3,7 +3,7 @@ package the17track
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
@@ -25,7 +25,7 @@ func (t *The17Track) Init() error {
 }
 
 func (t *The17Track) StartTracking(trackingNumber string) error {
-	log.Println("Starting tracking for:", trackingNumber)
+	slog.Info("Starting tracking", "trackingNumber", trackingNumber)
 
 	// 检查 API key 是否配置
 	apiKey := config.Config.The17TrackSecretKey
@@ -88,8 +88,8 @@ func (t *The17Track) StartTracking(trackingNumber string) error {
 		return err
 	}
 
-	log.Printf("Successfully registered tracking number %s with 17Track", trackingNumber)
-	log.Printf("Webhook URL: %s", utils.GetPublicUrl("17track", "webhook"))
+	slog.Info("Successfully registered tracking number with 17Track", "trackingNumber", trackingNumber)
+	slog.Info("17Track webhook URL", "url", utils.GetPublicUrl("17track", "webhook"))
 
 	return nil
 }
@@ -110,7 +110,7 @@ func (t *The17Track) HandleRequest(c *pin.Context, path string) error {
 		if event.Event == "TRACKING_UPDATED" {
 			err := utils.UpdateStatus(event.Data.Number, t.convertStatus(event.Data.TrackInfo.LatestStatus.Status))
 			if err != nil {
-				log.Printf("Error updating status for %s: %v", event.Data.Number, err)
+				slog.Error("Error updating status", "trackingNumber", event.Data.Number, "error", err)
 				c.JSON(500, map[string]string{
 					"error": "Failed to update tracking status",
 				})

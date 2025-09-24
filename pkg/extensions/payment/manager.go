@@ -2,7 +2,7 @@ package payment
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 
 	"github.com/flaboy/aira-core/pkg/database"
 	"github.com/flaboy/aira-shop/pkg/extensions/payment/types"
@@ -25,12 +25,12 @@ func (pm *PaymentManager) CreatePayment(channel string, businessContext interfac
 		return nil, fmt.Errorf("payment channel '%s' not found", channel)
 	}
 
-	log.Printf("[PaymentManager] Calling %s.CreatePayment with amount: %d", channel, amount)
+	slog.Info("[PaymentManager] Calling CreatePayment", "channel", channel, "amount", amount)
 	result, err := paymentChannel.CreatePayment(businessContext, amount, currency)
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("[PaymentManager] %s.CreatePayment returned amount: %d", channel, result.Amount)
+	slog.Info("[PaymentManager] CreatePayment returned", "channel", channel, "amount", result.Amount)
 
 	return result, nil
 }

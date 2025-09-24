@@ -4,7 +4,7 @@ package ups
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,8 +24,8 @@ func (u *UPS) Init() error {
 }
 
 func (u *UPS) StartTracking(trackingNumber string) error {
-	log.Println("Starting UPS tracking for:", trackingNumber)
-	log.Println(utils.GetPublicUrl("ups", "/webhook"))
+	slog.Info("Starting UPS tracking", "trackingNumber", trackingNumber)
+	slog.Info("UPS webhook URL", "url", utils.GetPublicUrl("ups", "/webhook"))
 	return nil
 }
 
