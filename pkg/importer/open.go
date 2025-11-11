@@ -476,14 +476,10 @@ func (e *EntityTypes[T]) setStructFieldsCSV(value reflect.Value, valueType refle
 // excelColumnNameToIndex 将 Excel 列名转换为索引 (A->0, B->1, ...)
 func (e *EntityTypes[T]) excelColumnNameToIndex(colName string) int {
 	result := 0
-	for i, char := range colName {
-		if i == 0 {
-			result = int(char) - int('A')
-		} else {
-			result = result*26 + int(char) - int('A') + 1
-		}
+	for _, char := range colName {
+		result = result*26 + int(char) - int('A') + 1
 	}
-	return result
+	return result - 1 // 转换为 0-based 索引
 }
 
 // hasNonZeroFields 检查结构体是否有非零字段
