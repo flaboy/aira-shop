@@ -19,6 +19,7 @@ type CommenceConfig struct {
 	PayPal struct {
 		ClientID     string `cfg:"CLIENT_ID"`
 		ClientSecret string `cfg:"CLIENT_SECRET"`
+		Sandbox      bool   `cfg:"SANDBOX" default:"false"`
 	} `cfg:"PAYPAL"`
 }
 

@@ -25,8 +25,11 @@ type PayPal struct {
 func (p *PayPal) Init() error {
 	// 根据配置选择环境
 	var environment string
-	// 如果没有配置ClientSecret或者是测试环境，使用沙盒
-	environment = paypal.APIBaseSandBox
+	if config.Config.PayPal.Sandbox {
+		environment = paypal.APIBaseSandBox
+	} else {
+		environment = paypal.APIBaseLive
+	}
 
 	// 创建PayPal客户端
 	client, err := paypal.NewClient(
