@@ -123,7 +123,11 @@ func (e *EntityTypes[T]) openCSVForAggregation(fd io.Reader, config *ImportCSVMa
 	}
 }
 
-// aggregateItems 聚合具有相同主键的数据项。主键为空且无法合并到前一条的行会作为“孤儿行”一并返回，供上层校验并报错（如订单号必填）。
+// aggregateItems 聚合具有相同主键的数据项。
+// - 主键为空且无法合并到前一条的行会作为“孤儿行”一并返回，供上层校验并报错（如订单号必填）
+// - 对于具有 BuyerName/Address/Zip/State/Country/Phone 等字段的结构体（订单导入场景），
+//   同一主键下若这些关键字段不一致，则该行不会被聚合到主记录中，而是作为单独记录返回，
+//   由上层 Handler 执行一致性校验并报错。
 func (e *EntityTypes[T]) aggregateItems(items []T, aggregateBy string) []T {
 	if aggregateBy == "" {
 		return items // 如果没有指定聚合字段，直接返回
@@ -134,7 +138,9 @@ func (e *EntityTypes[T]) aggregateItems(items []T, aggregateBy string) []T {
 	// 记录主键的顺序，确保结果保持原始顺序
 	keyOrder := make([]string, 0)
 	var lastMainRecord *T // 用于存储最近的主记录
-	var orphans []T      // 主键为空且无法合并的行，需交给上层校验并报错
+	var orphans []T       // 主键为空或关键字段不一致而无法合并的行，需交给上层校验并报错
+	// 记录每个聚合键首次出现时的关键字段签名（买家和地址信息），用于检测后续行是否一致
+	addressKeyByAggregate := make(map[string]string)
 
 	for _, item := range items {
 		// 获取聚合字段的值
@@ -146,7 +152,18 @@ func (e *EntityTypes[T]) aggregateItems(items []T, aggregateBy string) []T {
 		if aggregateValue != "" {
 			// 有主键值的记录 - 这是主记录
 			if existing, exists := aggregateMap[aggregateValue]; exists {
-				// 合并到现有项目
+				// 对订单类结构体进行关键字段一致性检测（买家和地址）
+				currentKey := e.buildAddressKey(&item)
+				existingKey := addressKeyByAggregate[aggregateValue]
+				if existingKey != "" && currentKey != "" && existingKey != currentKey {
+					// 关键字段不一致：不合并到主记录，作为“孤儿行”交给上层做错误提示
+					orphans = append(orphans, item)
+					continue
+				}
+				// 关键字段一致或尚未记录关键字段，则正常合并
+				if existingKey == "" && currentKey != "" {
+					addressKeyByAggregate[aggregateValue] = currentKey
+				}
 				e.mergeItems(existing, &item)
 			} else {
 				// 创建新项目
@@ -154,6 +171,8 @@ func (e *EntityTypes[T]) aggregateItems(items []T, aggregateBy string) []T {
 				aggregateMap[aggregateValue] = &newItem
 				keyOrder = append(keyOrder, aggregateValue) // 记录主键顺序
 				lastMainRecord = &newItem                   // 更新最近的主记录
+				// 记录该主键的关键字段签名
+				addressKeyByAggregate[aggregateValue] = e.buildAddressKey(&newItem)
 			}
 		} else {
 			// 主键为空的记录 - 检查是否有嵌套数据需要合并到最近的主记录
@@ -179,6 +198,34 @@ func (e *EntityTypes[T]) aggregateItems(items []T, aggregateBy string) []T {
 	}
 
 	return result
+}
+
+// buildAddressKey 构造订单买家和收货地址字段的签名字符串。
+// 对于不包含这些字段的结构体（非订单导入场景），该方法返回空字符串。
+func (e *EntityTypes[T]) buildAddressKey(target *T) string {
+	// 这些字段名在 StandardOrder / Production / CustomDesignOrder 中是一致的
+	fields := []string{
+		e.GetFieldValue(target, "BuyerName"),
+		e.GetFieldValue(target, "Address1"),
+		e.GetFieldValue(target, "Address2"),
+		e.GetFieldValue(target, "Zip"),
+		e.GetFieldValue(target, "State"),
+		e.GetFieldValue(target, "Country"),
+		e.GetFieldValue(target, "Phone"),
+	}
+	hasValue := false
+	for i, v := range fields {
+		v = strings.TrimSpace(v)
+		fields[i] = v
+		if v != "" {
+			hasValue = true
+		}
+	}
+	if !hasValue {
+		// 对于没有这些字段的结构体，返回空串表示“不参与一致性检测”
+		return ""
+	}
+	return strings.Join(fields, "|")
 }
 
 // GetFieldValue 获取指定字段的值
