@@ -117,19 +117,18 @@ func (e *EntityTypes[T]) openExcel(fd io.Reader, config *ImportExcelMapping) fun
 				fmt.Printf("Warning: Failed to map row %d: %v\n", i+1, err)
 				continue // 映射失败，跳过这行
 			}
+			e.setRowNumber(&item, i+1)
 
 			// 验证整行数据（包括必需字段、正则和类型验证）
 			errors, isValid := e.ValidateRow(&item)
 
 			if !isValid {
-				fmt.Printf("Warning: Row %d validation failed, skipping\n", i+1)
+				fmt.Printf("Warning: Row %d validation failed\n", i+1)
 				for _, err := range errors {
 					fmt.Printf("  - %v\n", err)
 				}
-				continue
 			}
-
-			// 调用 yield 函数，如果返回 false 则停止迭代
+			// 无论是否通过校验都 yield，由上层 Handler 统一记录错误并决定是否入库
 			if !yield(item) {
 				return
 			}
@@ -179,23 +178,31 @@ func (e *EntityTypes[T]) openCSV(fd io.Reader, config *ImportCSVMapping) func(yi
 				fmt.Printf("Warning: Failed to map CSV row %d: %v\n", rowNumber, err)
 				continue // 映射失败，跳过这行
 			}
+			e.setRowNumber(&item, rowNumber)
 
 			// 验证整行数据（包括必需字段、正则和类型验证）
 			errors, isValid := e.ValidateRow(&item)
 
 			if !isValid {
-				fmt.Printf("Warning: CSV row %d validation failed, skipping\n", rowNumber)
+				fmt.Printf("Warning: CSV row %d validation failed\n", rowNumber)
 				for _, err := range errors {
 					fmt.Printf("  - %v\n", err)
 				}
-				continue
 			}
-
-			// 调用 yield 函数，如果返回 false 则停止迭代
+			// 无论是否通过校验都 yield，由上层 Handler 统一记录错误并决定是否入库
 			if !yield(item) {
 				return
 			}
 		}
+	}
+}
+
+// setRowNumber 若结构体有 RowNumber 字段（int），则设为文件中的实际行号（1-based），便于错误提示
+func (e *EntityTypes[T]) setRowNumber(target *T, rowNum int) {
+	v := reflect.ValueOf(target).Elem()
+	f := v.FieldByName("RowNumber")
+	if f.IsValid() && f.CanSet() && f.Kind() == reflect.Int {
+		f.SetInt(int64(rowNum))
 	}
 }
 
@@ -217,19 +224,29 @@ func (e *EntityTypes[T]) mapCSVRowToStruct(row []string, mapping ImportCSVMappin
 	return e.setStructFieldsCSV(targetValue, targetType, row, mapping, "")
 }
 
-// findFieldInfo 在字段信息列表中查找指定字段
+// findFieldInfo 在字段信息列表中查找指定字段。
+// 验证时 slice 元素路径为 OrderLine[0].Sku，而 analyze 扁平化为 OrderLine.Sku，故需用规范化路径再匹配一次。
 func (e *EntityTypes[T]) findFieldInfo(fieldName string) *FieldInfo {
 	for _, fieldInfo := range e.Fields {
 		if fieldInfo.FieldName == fieldName {
 			return &fieldInfo
 		}
 	}
+	// 去掉 [数字] 下标后再匹配，以便 OrderLine[0].Sku 匹配 OrderLine.Sku
+	normalized := sliceIndexRegexp.ReplaceAllString(fieldName, "")
+	for _, fieldInfo := range e.Fields {
+		if fieldInfo.FieldName == normalized {
+			return &fieldInfo
+		}
+	}
 	return nil
 }
 
+var sliceIndexRegexp = regexp.MustCompile(`\[\d+\]`)
+
 // ValidateRow 验证整行数据的所有字段（聚合模式）
 // 返回验证失败的错误列表和验证是否通过
-// 如果是次行（主键为空但有嵌套数据），将忽略必填字段验证
+// 若是次行（主键为空但有嵌套数据），仅跳过顶级字段的必填，OrderLine 等嵌套必填仍校验
 func (e *EntityTypes[T]) ValidateRow(target *T) ([]error, bool) {
 	targetValue := reflect.ValueOf(target).Elem()
 	targetType := targetValue.Type()
@@ -250,6 +267,7 @@ func (e *EntityTypes[T]) ValidateRow(target *T) ([]error, bool) {
 }
 
 // validateRowFields 递归验证行字段（聚合模式，支持次行记录）
+// isSecondaryRow 为 true 时仅跳过顶级字段（prefix==""）的必填，嵌套如 OrderLine[x].Sku 仍校验必填
 func (e *EntityTypes[T]) validateRowFields(value reflect.Value, valueType reflect.Type, prefix string, failedErrors *[]error, isSecondaryRow bool) bool {
 	isValid := true
 
@@ -267,9 +285,9 @@ func (e *EntityTypes[T]) validateRowFields(value reflect.Value, valueType reflec
 			if fieldInfo := e.findFieldInfo(fieldName); fieldInfo != nil {
 				fieldValue := field.String()
 
-				// 对于次行记录，跳过必填字段验证
-				if !isSecondaryRow {
-					// 主行记录：进行完整验证
+				// 仅对次行的顶级字段跳过必填；嵌套字段（如 OrderLine[0].Sku）仍校验
+				skipRequired := isSecondaryRow && prefix == ""
+				if !skipRequired {
 					// 1. 检查必需字段
 					if fieldInfo.IsRequired && fieldValue == "" {
 						*failedErrors = append(*failedErrors, fmt.Errorf("field '%s': required field is empty", fieldName))

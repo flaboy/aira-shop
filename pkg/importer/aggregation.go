@@ -107,6 +107,7 @@ func (e *EntityTypes[T]) openCSVForAggregation(fd io.Reader, config *ImportCSVMa
 			if err := e.mapCSVRowToStruct(row, *config, &item); err != nil {
 				continue // 映射失败，跳过这行
 			}
+			e.setRowNumber(&item, rowNumber)
 
 			// 使用聚合感知的验证（对次行跳过必填字段验证）
 			_, isValid := e.ValidateRow(&item)
@@ -122,7 +123,7 @@ func (e *EntityTypes[T]) openCSVForAggregation(fd io.Reader, config *ImportCSVMa
 	}
 }
 
-// aggregateItems 聚合具有相同主键的数据项
+// aggregateItems 聚合具有相同主键的数据项。主键为空且无法合并到前一条的行会作为“孤儿行”一并返回，供上层校验并报错（如订单号必填）。
 func (e *EntityTypes[T]) aggregateItems(items []T, aggregateBy string) []T {
 	if aggregateBy == "" {
 		return items // 如果没有指定聚合字段，直接返回
@@ -133,6 +134,7 @@ func (e *EntityTypes[T]) aggregateItems(items []T, aggregateBy string) []T {
 	// 记录主键的顺序，确保结果保持原始顺序
 	keyOrder := make([]string, 0)
 	var lastMainRecord *T // 用于存储最近的主记录
+	var orphans []T      // 主键为空且无法合并的行，需交给上层校验并报错
 
 	for _, item := range items {
 		// 获取聚合字段的值
@@ -158,17 +160,22 @@ func (e *EntityTypes[T]) aggregateItems(items []T, aggregateBy string) []T {
 			if lastMainRecord != nil && hasNested {
 				// 合并到最近的主记录
 				e.mergeItems(lastMainRecord, &item)
+			} else {
+				// 无法合并：前面没有主记录，或本行没有明细。作为孤儿行返回，让上层校验并报“订单号必填”等错误
+				orphans = append(orphans, item)
 			}
-			// 如果没有嵌套数据或没有主记录，跳过此记录
 		}
 	}
 
 	// 按照原始顺序转换 map 为数组
-	result := make([]T, 0, len(aggregateMap))
+	result := make([]T, 0, len(aggregateMap)+len(orphans))
 	for _, key := range keyOrder {
 		if item, exists := aggregateMap[key]; exists {
 			result = append(result, *item)
 		}
+	}
+	for _, item := range orphans {
+		result = append(result, item)
 	}
 
 	return result
