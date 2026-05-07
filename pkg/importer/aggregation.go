@@ -5,6 +5,8 @@ import (
 	"io"
 	"reflect"
 	"strings"
+
+	"github.com/xuri/excelize/v2"
 )
 
 // // OpenWithAggregation 在现有的 Open 方法基础上添加聚合选项
@@ -25,8 +27,8 @@ func (e *EntityTypes[T]) openExcelWithAggregation(fd io.Reader, config *ImportEx
 		// 首先收集所有数据
 		allItems := make([]T, 0)
 
-		// 使用现有的 openExcel 方法收集数据
-		for item := range e.openExcel(fd, config) {
+		// 使用聚合感知的 Excel 处理方法收集数据
+		for item := range e.openExcelForAggregation(fd, config) {
 			allItems = append(allItems, item)
 		}
 
@@ -35,6 +37,56 @@ func (e *EntityTypes[T]) openExcelWithAggregation(fd io.Reader, config *ImportEx
 
 		// 输出聚合后的结果
 		for _, item := range aggregatedItems {
+			if !yield(item) {
+				return
+			}
+		}
+	}
+}
+
+// openExcelForAggregation Excel数据聚合感知处理，验证失败的行直接跳过。
+func (e *EntityTypes[T]) openExcelForAggregation(fd io.Reader, config *ImportExcelMapping) func(yield func(T) bool) {
+	return func(yield func(T) bool) {
+		excelFile, err := excelize.OpenReader(fd)
+		if err != nil {
+			return
+		}
+		defer excelFile.Close()
+
+		rows, err := excelFile.GetRows(config.SheetName)
+		if err != nil || len(rows) <= config.HeaderRow {
+			return
+		}
+
+		emptyRowCount := 0
+		const maxEmptyRows = 10
+
+		for i := config.HeaderRow; i < len(rows); i++ {
+			row := rows[i]
+			if e.isEmptyRow(row) {
+				emptyRowCount++
+				if emptyRowCount >= maxEmptyRows {
+					break
+				}
+				continue
+			}
+
+			emptyRowCount = 0
+
+			var item T
+			if err := e.mapRowToStruct(row, config.Mapping, &item); err != nil {
+				continue
+			}
+			e.setRowNumber(&item, i+1)
+
+			_, isValid := e.ValidateRow(&item)
+			if !isValid {
+				primaryKeyField := e.GetPrimaryKeyField()
+				if primaryKeyField == "" || e.GetFieldValue(&item, primaryKeyField) != "" || !e.HasNonEmptyNestedFields(&item) {
+					continue
+				}
+			}
+
 			if !yield(item) {
 				return
 			}
@@ -124,10 +176,10 @@ func (e *EntityTypes[T]) openCSVForAggregation(fd io.Reader, config *ImportCSVMa
 }
 
 // aggregateItems 聚合具有相同主键的数据项。
-// - 主键为空且无法合并到前一条的行会作为“孤儿行”一并返回，供上层校验并报错（如订单号必填）
-// - 对于具有 BuyerName/Address/Zip/State/Country/Phone 等字段的结构体（订单导入场景），
-//   同一主键下若这些关键字段不一致，则该行不会被聚合到主记录中，而是作为单独记录返回，
-//   由上层 Handler 执行一致性校验并报错。
+//   - 主键为空且无法合并到前一条的行会跳过，避免生成空订单号记录。
+//   - 对于具有 BuyerName/Address/Zip/State/Country/Phone 等字段的结构体（订单导入场景），
+//     同一主键下若这些关键字段不一致，则该行不会被聚合到主记录中，而是作为单独记录返回，
+//     由上层 Handler 执行一致性校验并报错。
 func (e *EntityTypes[T]) aggregateItems(items []T, aggregateBy string) []T {
 	if aggregateBy == "" {
 		return items // 如果没有指定聚合字段，直接返回
@@ -179,9 +231,6 @@ func (e *EntityTypes[T]) aggregateItems(items []T, aggregateBy string) []T {
 			if lastMainRecord != nil && hasNested {
 				// 合并到最近的主记录
 				e.mergeItems(lastMainRecord, &item)
-			} else {
-				// 无法合并：前面没有主记录，或本行没有明细。作为孤儿行返回，让上层校验并报“订单号必填”等错误
-				orphans = append(orphans, item)
 			}
 		}
 	}
@@ -277,10 +326,13 @@ func (e *EntityTypes[T]) mergeStructFields(target reflect.Value, source reflect.
 
 		switch targetField.Kind() {
 		case reflect.Slice:
-			// 合并切片字段
+			// 合并切片字段，续行缺少的必填字段沿用上一条明细。
 			if sourceField.Len() > 0 {
 				for j := 0; j < sourceField.Len(); j++ {
 					elem := sourceField.Index(j)
+					if targetField.Len() > 0 && elem.Kind() == reflect.Struct {
+						elem = e.fillMissingRequiredSliceFields(targetField.Index(targetField.Len()-1), elem)
+					}
 					targetField.Set(reflect.Append(targetField, elem))
 				}
 			}
@@ -299,6 +351,25 @@ func (e *EntityTypes[T]) mergeStructFields(target reflect.Value, source reflect.
 			}
 		}
 	}
+}
+
+func (e *EntityTypes[T]) fillMissingRequiredSliceFields(previous reflect.Value, current reflect.Value) reflect.Value {
+	result := reflect.New(current.Type()).Elem()
+	result.Set(current)
+	for i := 0; i < result.NumField(); i++ {
+		field := result.Field(i)
+		if field.Kind() != reflect.String || field.String() != "" {
+			continue
+		}
+		if current.Type().Field(i).Name != "ProductionURL" {
+			continue
+		}
+		previousField := previous.Field(i)
+		if previousField.Kind() == reflect.String && previousField.String() != "" {
+			field.SetString(previousField.String())
+		}
+	}
+	return result
 }
 
 // HasNonEmptyNestedFields 检查记录是否有非空的嵌套字段（如切片）

@@ -622,6 +622,17 @@ func (r *csvImportReader[T]) Count() (int, error) {
 	}
 
 	count := 0
+	if r.primaryKeyField != "" {
+		for range r.entityTypes.openCSVWithAggregation(r.file, r.config, r.primaryKeyField) {
+			count++
+		}
+		_, err = r.file.Seek(currentPos, io.SeekStart)
+		if err != nil {
+			return count, err
+		}
+		return count, nil
+	}
+
 	emptyRowCount := 0
 	const maxEmptyRows = 10
 
@@ -684,6 +695,17 @@ func (r *excelImportReader[T]) Count() (int, error) {
 	}
 
 	count := 0
+	if r.primaryKeyField != "" {
+		_, err = r.file.Seek(0, io.SeekStart)
+		if err != nil {
+			return 0, err
+		}
+		for range r.entityTypes.openExcelWithAggregation(r.file, r.config, r.primaryKeyField) {
+			count++
+		}
+		return count, nil
+	}
+
 	emptyRowCount := 0
 	const maxEmptyRows = 10
 
