@@ -166,6 +166,7 @@ func (p *Shopify) HandleCallback(c *pin.Context, businessContext json.RawMessage
 
 	// 订阅webhook
 	if err := p.subscribeWebhooks(client); err != nil {
+		fmt.Printf("Shopify webhook subscription failed for shop %s: %v\n", shopUrl, err)
 		return nil, errors.ErrWebhookSubscription
 	}
 
