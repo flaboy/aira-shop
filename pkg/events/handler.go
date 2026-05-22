@@ -6,6 +6,9 @@ type EventHandler interface {
 	OnShopConnected(event *types.ShopConnectedEvent) error
 	OnProductPublished(event *types.ProductPublishedEvent) error
 	OnOrderReceived(event *types.OrderReceivedEvent) error
+	OnOrderUpdated(event *types.OrderStatusChangedEvent) error
+	OnOrderCancelled(event *types.OrderStatusChangedEvent) error
+	OnOrderFulfilled(event *types.OrderStatusChangedEvent) error
 	OnPaymentCompleted(event *types.PaymentCompletedEvent) error
 }
 
@@ -32,6 +35,27 @@ func EmitProductPublished(event *types.ProductPublishedEvent) error {
 func EmitOrderReceived(event *types.OrderReceivedEvent) error {
 	if handler != nil {
 		return handler.OnOrderReceived(event)
+	}
+	return nil
+}
+
+func EmitOrderUpdated(event *types.OrderStatusChangedEvent) error {
+	if handler != nil {
+		return handler.OnOrderUpdated(event)
+	}
+	return nil
+}
+
+func EmitOrderCancelled(event *types.OrderStatusChangedEvent) error {
+	if handler != nil {
+		return handler.OnOrderCancelled(event)
+	}
+	return nil
+}
+
+func EmitOrderFulfilled(event *types.OrderStatusChangedEvent) error {
+	if handler != nil {
+		return handler.OnOrderFulfilled(event)
 	}
 	return nil
 }

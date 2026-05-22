@@ -656,6 +656,11 @@ func (p *Shopify) handleOrderCreate(event json.RawMessage) error {
 
 	fmt.Printf("Processing Shopify order: %s (ID: %d)\n", order.Name, order.Id)
 
+	if order.FinancialStatus != goshopify.OrderFinancialStatusPaid {
+		fmt.Printf("Skipping Shopify order %s because financial status is %s\n", order.Name, order.FinancialStatus)
+		return nil
+	}
+
 	totalShipping := decimal.NewFromInt(0)
 	hasTotalShipping := false
 	for _, s := range order.ShippingLines {
@@ -682,20 +687,21 @@ func (p *Shopify) handleOrderCreate(event json.RawMessage) error {
 		TotalTax:          order.TotalTax,
 		Currency:          order.Currency,
 
-		// 客户信息
-		Customer: &types.OrderCustomer{
-			ID:        fmt.Sprintf("%d", order.Customer.Id),
-			Email:     order.Customer.Email,
-			FirstName: order.Customer.FirstName,
-			LastName:  order.Customer.LastName,
-			Phone:     order.Customer.Phone,
-		},
-
 		// 原始数据存储完整的订单信息，以防需要访问更详细的信息
 		RawData: map[string]interface{}{
 			"source_name": "shopify",
 			"order":       order,
 		},
+	}
+
+	if order.Customer != nil {
+		orderData.Customer = &types.OrderCustomer{
+			ID:        fmt.Sprintf("%d", order.Customer.Id),
+			Email:     order.Customer.Email,
+			FirstName: order.Customer.FirstName,
+			LastName:  order.Customer.LastName,
+			Phone:     order.Customer.Phone,
+		}
 	}
 
 	if hasTotalShipping {
@@ -826,12 +832,14 @@ func (p *Shopify) handleOrderCreate(event json.RawMessage) error {
 
 	// 触发订单接收事件
 	fmt.Printf("Emitting order received event for shop ID %d\n", shopID)
-	events.EmitOrderReceived(&types.OrderReceivedEvent{
+	if err := events.EmitOrderReceived(&types.OrderReceivedEvent{
 		Platform:  "shopify",
 		OrderData: orderData,
 		ShopID:    shopID,
 		CreatedAt: time.Now(),
-	})
+	}); err != nil {
+		return err
+	}
 
 	fmt.Printf("Successfully processed Shopify order %s (Total line items: %d)\n",
 		order.Name, len(orderData.LineItems))
@@ -842,66 +850,64 @@ func (p *Shopify) handleOrderCreate(event json.RawMessage) error {
 func (p *Shopify) handleOrderUpdate(event json.RawMessage) error {
 	fmt.Printf("Handling order update event - Payload size: %d bytes\n", len(event))
 
-	// 解析订单数据以获取基本信息用于日志
-	var orderBasic struct {
-		ID   uint64 `json:"id"`
-		Name string `json:"name"`
-	}
-	if err := json.Unmarshal(event, &orderBasic); err == nil {
-		fmt.Printf("Order update for: %s (ID: %d)\n", orderBasic.Name, orderBasic.ID)
+	order, err := p.parseOrderStatusChangedEvent(event)
+	if err != nil {
+		return err
 	}
 
-	// TODO: 实现具体的订单更新逻辑
-	return nil
+	fmt.Printf("Order update for: %s (ID: %s)\n", order.Name, order.OrderID)
+	if order.FinancialStatus == types.OrderFinancialStatusPaid {
+		return p.handleOrderCreate(event)
+	}
+	return events.EmitOrderUpdated(order)
 }
 
 // 处理订单支付事件
 func (p *Shopify) handleOrderPaid(event json.RawMessage) error {
 	fmt.Printf("Handling order paid event - Payload size: %d bytes\n", len(event))
 
-	// 解析订单数据以获取基本信息用于日志
-	var orderBasic struct {
-		ID   uint64 `json:"id"`
-		Name string `json:"name"`
-	}
-	if err := json.Unmarshal(event, &orderBasic); err == nil {
-		fmt.Printf("Order paid for: %s (ID: %d)\n", orderBasic.Name, orderBasic.ID)
-	}
-
-	// TODO: 实现具体的订单支付逻辑
-	return nil
+	return p.handleOrderCreate(event)
 }
 
 // 处理订单取消事件
 func (p *Shopify) handleOrderCancelled(event json.RawMessage) error {
 	fmt.Printf("Handling order cancelled event - Payload size: %d bytes\n", len(event))
 
-	// 解析订单数据以获取基本信息用于日志
-	var orderBasic struct {
-		ID   uint64 `json:"id"`
-		Name string `json:"name"`
-	}
-	if err := json.Unmarshal(event, &orderBasic); err == nil {
-		fmt.Printf("Order cancelled for: %s (ID: %d)\n", orderBasic.Name, orderBasic.ID)
+	order, err := p.parseOrderStatusChangedEvent(event)
+	if err != nil {
+		return err
 	}
 
-	// TODO: 实现具体的订单取消逻辑
-	return nil
+	fmt.Printf("Order cancelled for: %s (ID: %s)\n", order.Name, order.OrderID)
+	return events.EmitOrderCancelled(order)
 }
 
 // 处理订单完成事件
 func (p *Shopify) handleOrderFulfilled(event json.RawMessage) error {
 	fmt.Printf("Handling order fulfilled event - Payload size: %d bytes\n", len(event))
 
-	// 解析订单数据以获取基本信息用于日志
-	var orderBasic struct {
-		ID   uint64 `json:"id"`
-		Name string `json:"name"`
-	}
-	if err := json.Unmarshal(event, &orderBasic); err == nil {
-		fmt.Printf("Order fulfilled for: %s (ID: %d)\n", orderBasic.Name, orderBasic.ID)
+	order, err := p.parseOrderStatusChangedEvent(event)
+	if err != nil {
+		return err
 	}
 
-	// TODO: 实现具体的订单完成逻辑
-	return nil
+	fmt.Printf("Order fulfilled for: %s (ID: %s)\n", order.Name, order.OrderID)
+	return events.EmitOrderFulfilled(order)
+}
+
+func (p *Shopify) parseOrderStatusChangedEvent(event json.RawMessage) (*types.OrderStatusChangedEvent, error) {
+	order := shopify.Order{}
+	if err := json.Unmarshal(event, &order); err != nil {
+		return nil, fmt.Errorf("error unmarshaling order status event: %v", err)
+	}
+
+	return &types.OrderStatusChangedEvent{
+		Platform:          "shopify",
+		OrderID:           fmt.Sprintf("%d", order.Id),
+		Name:              order.Name,
+		FinancialStatus:   convertFinancialStatus(order.FinancialStatus),
+		FulfillmentStatus: convertFulfillmentStatus(order.FulfillmentStatus),
+		RawData:           map[string]interface{}{"order": order},
+		CreatedAt:         time.Now(),
+	}, nil
 }

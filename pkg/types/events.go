@@ -125,6 +125,16 @@ type OrderReceivedEvent struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+type OrderStatusChangedEvent struct {
+	Platform          string                 `json:"platform"`
+	OrderID           string                 `json:"order_id"`
+	Name              string                 `json:"name"`
+	FinancialStatus   OrderFinancialStatus   `json:"financial_status"`
+	FulfillmentStatus OrderFulfillmentStatus `json:"fulfillment_status"`
+	RawData           map[string]interface{} `json:"raw_data"`
+	CreatedAt         time.Time              `json:"created_at"`
+}
+
 type PaymentCompletedEvent struct {
 	TX              *gorm.DB
 	PaymentHashID   string           `json:"payment_hash_id"`
