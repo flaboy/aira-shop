@@ -33,15 +33,15 @@ func TestHandleOrderCreateReturnsOrderReceivedError(t *testing.T) {
 	}
 }
 
-func TestHandleOrderCreateSkipsUnpaidOrders(t *testing.T) {
+func TestHandleOrderCreateDoesNotOwnPaidBusinessRule(t *testing.T) {
 	source, err := os.ReadFile("shopify.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	content := string(source)
-	if !strings.Contains(content, `if order.FinancialStatus != goshopify.OrderFinancialStatusPaid`) {
-		t.Fatal("orders/create should skip Shopify orders that are not paid")
+	if strings.Contains(content, `order.FinancialStatus != goshopify.OrderFinancialStatusPaid`) {
+		t.Fatal("orders/create paid filtering should be handled by the host system")
 	}
 }
 

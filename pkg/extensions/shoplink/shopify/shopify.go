@@ -656,11 +656,6 @@ func (p *Shopify) handleOrderCreate(event json.RawMessage) error {
 
 	fmt.Printf("Processing Shopify order: %s (ID: %d)\n", order.Name, order.Id)
 
-	if order.FinancialStatus != goshopify.OrderFinancialStatusPaid {
-		fmt.Printf("Skipping Shopify order %s because financial status is %s\n", order.Name, order.FinancialStatus)
-		return nil
-	}
-
 	totalShipping := decimal.NewFromInt(0)
 	hasTotalShipping := false
 	for _, s := range order.ShippingLines {
