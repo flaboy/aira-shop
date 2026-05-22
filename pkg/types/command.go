@@ -41,6 +41,11 @@ type PutProductResult struct {
 	RemoteData    interface{}   `json:"remote_data"`
 }
 
+type DeleteProductResult struct {
+	CommandResult CommandResult `json:"command_result"`
+	OuterID       string        `json:"outer_id"`
+}
+
 type ShopCredential struct {
 	Platform string                 `json:"platform"`
 	Data     map[string]interface{} `json:"data"`

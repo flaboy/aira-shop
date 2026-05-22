@@ -388,6 +388,43 @@ func (p *Shopify) PutProduct(credential *types.ShopCredential, product *types.Pr
 	}, nil
 }
 
+func (p *Shopify) DeleteProduct(credential *types.ShopCredential, outerID string) (*types.DeleteProductResult, error) {
+	var creds ShopifyCredential
+	credData, err := json.Marshal(credential.Data)
+	if err != nil {
+		return nil, usererrors.New(fmt.Sprintf("Failed to marshal credentials: %s", err.Error()))
+	}
+
+	if err := json.Unmarshal(credData, &creds); err != nil {
+		return nil, usererrors.New(fmt.Sprintf("Failed to unmarshal credentials: %s", err.Error()))
+	}
+
+	client, err := shopify.NewClient(*app, creds.Url, creds.AccessToken)
+	if err != nil {
+		return nil, usererrors.New(fmt.Sprintf("Failed to create Shopify client: %s", err.Error()))
+	}
+
+	productID := cast.ToUint64(outerID)
+	if productID == 0 {
+		return nil, usererrors.New("Invalid Shopify product id")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	if err := client.Product.Delete(ctx, productID); err != nil {
+		return nil, usererrors.New(fmt.Sprintf("Failed to delete product: %s", err.Error()))
+	}
+
+	return &types.DeleteProductResult{
+		CommandResult: types.CommandResult{
+			Success: true,
+			Message: "Product deleted successfully",
+		},
+		OuterID: outerID,
+	}, nil
+}
+
 func (p *Shopify) variantUniqId(v *shopify.Variant) string {
 	return strings.Join([]string{
 		v.Option1,

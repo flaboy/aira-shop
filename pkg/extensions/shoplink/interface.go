@@ -15,6 +15,9 @@ type ShopPlatform interface {
 	// 发布产品到平台 - 使用BusinessContext参数
 	PutProduct(credential *types.ShopCredential, product *types.ProductData, businessContext json.RawMessage) (*types.PutProductResult, error)
 
+	// 从平台删除产品
+	DeleteProduct(credential *types.ShopCredential, outerID string) (*types.DeleteProductResult, error)
+
 	// 处理公开请求（如OAuth授权）
 	HandleRequest(c *pin.Context, path string) (*types.HandleRequestResult, error)
 
