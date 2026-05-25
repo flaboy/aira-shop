@@ -286,8 +286,26 @@ func (p *PayPal) updatePaymentStatus(paymentID uint, status, message string) err
 		return err
 	}
 
+	if status == "failed" || status == "cancelled" {
+		if err := markWalletPaymentOrderFailed(database.Database(), paymentID, message); err != nil {
+			return err
+		}
+	}
+
 	slog.Info("Updated payment %d status to %s", paymentID, status)
 	return nil
+}
+
+func markWalletPaymentOrderFailed(db *gorm.DB, paymentID uint, message string) error {
+	paymentHashID := utils.EncodePaymentID(paymentID)
+	return db.Exec(
+		"UPDATE wallet_payment_orders SET status = ?, failure_reason = ? WHERE payment_id IN (?, ?) AND status = ?",
+		"failed",
+		message,
+		"pay-rc-"+paymentHashID,
+		"pay-cr-"+paymentHashID,
+		"processing",
+	).Error
 }
 
 // processSuccessfulPayment 处理成功的支付
