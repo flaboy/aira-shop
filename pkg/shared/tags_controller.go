@@ -62,7 +62,13 @@ func (tc *TagsController) QueryByTargetType(c *pin.Context) error {
 		return err
 	}
 
-	// Add usage count for each tag
+	var targetTags []addon.Tags
+	err = database.Database().Where("target_type = ?", targetType).Find(&targetTags).Error
+	if err != nil {
+		return err
+	}
+	usageCounts := buildTagUsageCounts(tagNames, targetTags)
+
 	type TagWithUsage struct {
 		addon.TagNames
 		UsageCount int64 `json:"usage_count"`
@@ -70,10 +76,9 @@ func (tc *TagsController) QueryByTargetType(c *pin.Context) error {
 
 	result := []TagWithUsage{}
 	for _, tag := range tagNames {
-		count, _ := tc.getTagUsageCount(tag.TargetType, tag.Name)
 		result = append(result, TagWithUsage{
 			TagNames:   tag,
-			UsageCount: count,
+			UsageCount: usageCounts[tag.ID],
 		})
 	}
 
@@ -177,6 +182,57 @@ func (tc *TagsController) DeleteByTargetType(c *pin.Context) error {
 	return c.Render(map[string]interface{}{"name": tagName, "deleted": true})
 }
 
+func buildTagUsageCounts(tagNames []addon.TagNames, tagRows []addon.Tags) map[uint]int64 {
+	counts := make(map[uint]int64, len(tagNames))
+	for _, tagName := range tagNames {
+		bitMask := uint(1) << (tagName.BitNum - 1)
+		for _, tagRow := range tagRows {
+			if tagCellValue(tagRow, tagName.CellName)&bitMask == bitMask {
+				counts[tagName.ID]++
+			}
+		}
+	}
+	return counts
+}
+
+func tagCellValue(tagRow addon.Tags, cellName string) uint {
+	switch cellName {
+	case "Cell1":
+		return tagRow.Cell1
+	case "Cell2":
+		return tagRow.Cell2
+	case "Cell3":
+		return tagRow.Cell3
+	case "Cell4":
+		return tagRow.Cell4
+	case "Cell5":
+		return tagRow.Cell5
+	case "Cell6":
+		return tagRow.Cell6
+	case "Cell7":
+		return tagRow.Cell7
+	case "Cell8":
+		return tagRow.Cell8
+	case "Cell9":
+		return tagRow.Cell9
+	case "Cell10":
+		return tagRow.Cell10
+	case "Cell11":
+		return tagRow.Cell11
+	case "Cell12":
+		return tagRow.Cell12
+	case "Cell13":
+		return tagRow.Cell13
+	case "Cell14":
+		return tagRow.Cell14
+	case "Cell15":
+		return tagRow.Cell15
+	case "Cell16":
+		return tagRow.Cell16
+	}
+	panic("invalid tag cell name")
+}
+
 // GetTaggedItemsByTargetType GET /:target_type/:name/items
 func (tc *TagsController) GetTaggedItemsByTargetType(c *pin.Context) error {
 	targetType := routes.GetParam(c, "target_type")
@@ -190,27 +246,4 @@ func (tc *TagsController) GetTaggedItemsByTargetType(c *pin.Context) error {
 	// items, err := services.GetTaggedItems(targetType, tagName, page, size)
 	// 暂时返回错误提示
 	return usererrors.New("GetTaggedItems method not implemented in service layer")
-}
-
-// Helper function to get tag usage count
-func (tc *TagsController) getTagUsageCount(targetType, tagName string) (int64, error) {
-	// Find the tag configuration
-	var tag addon.TagNames
-	err := database.Database().Where("target_type = ? AND name = ?", targetType, tagName).Limit(1).Find(&tag).Error
-	if err != nil {
-		return 0, err
-	}
-	if tag.ID == 0 {
-		return 0, nil
-	}
-
-	// Count how many records have this tag set
-	bitMask := uint64(1) << (tag.BitNum - 1)
-	var count int64
-	tagTableName := (&addon.Tags{}).TableName()
-
-	countSQL := "SELECT COUNT(*) FROM " + tagTableName + " WHERE target_type = ? AND (" + tag.CellName + " & ?) = ?"
-	err = database.Database().Raw(countSQL, targetType, bitMask, bitMask).Scan(&count).Error
-
-	return count, err
 }
