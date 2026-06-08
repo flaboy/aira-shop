@@ -143,7 +143,7 @@ func (mc *MetaController) UpdateByTargetType(c *pin.Context) error {
 	}
 
 	var metaKey addon.MetaKey
-	err := database.Database().Where("id = ? AND target_type = ?", id, targetType).Limit(1).Find(&metaKey).Error
+	err := findMetaKeyByIdentifier(targetType, id, &metaKey)
 	if err != nil {
 		return err
 	}
@@ -174,7 +174,7 @@ func (mc *MetaController) DeleteByTargetType(c *pin.Context) error {
 	}
 
 	var metaKey addon.MetaKey
-	err := database.Database().Where("id = ? AND target_type = ?", id, targetType).Limit(1).Find(&metaKey).Error
+	err := findMetaKeyByIdentifier(targetType, id, &metaKey)
 	if err != nil {
 		return err
 	}
@@ -188,6 +188,28 @@ func (mc *MetaController) DeleteByTargetType(c *pin.Context) error {
 	}
 
 	return c.Render(map[string]interface{}{"id": id, "deleted": true})
+}
+
+func findMetaKeyByIdentifier(targetType string, identifier string, metaKey *addon.MetaKey) error {
+	tx := database.Database().Where("target_type = ?", targetType)
+	if isMetaKeyIDIdentifier(identifier) {
+		tx = tx.Where("id = ?", identifier)
+	} else {
+		tx = tx.Where("meta_name = ?", identifier)
+	}
+	return tx.Limit(1).Find(metaKey).Error
+}
+
+func isMetaKeyIDIdentifier(identifier string) bool {
+	if identifier == "" {
+		return false
+	}
+	for _, char := range identifier {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // StatisticsByTargetType GET /:target_type/statistics
