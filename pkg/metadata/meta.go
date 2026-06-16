@@ -103,8 +103,20 @@ func QueryByMeta(tx *gorm.DB, targetType string, metakey string, val interface{}
 	}
 
 	// 使用EXISTS子查询来筛选有匹配元数据的记录
-	return tx.Where("EXISTS (SELECT 1 FROM meta_values WHERE meta_values.target_type = ? AND meta_values.target_id = "+tableName+".id AND meta_values.meta_key_id = ? AND meta_values.value = ?)",
+	return tx.Where(metaValueExistsCondition(tableName),
 		targetType, metaKey.ID, valueStr)
+}
+
+func metaValueExistsCondition(tableName string) string {
+	metaValueTable := addon.MetaValue{}.TableName()
+
+	return fmt.Sprintf("EXISTS (SELECT 1 FROM %s WHERE %s.target_type = ? AND %s.target_id = %s.id AND %s.meta_key_id = ? AND %s.value = ?)",
+		metaValueTable,
+		metaValueTable,
+		metaValueTable,
+		tableName,
+		metaValueTable,
+		metaValueTable)
 }
 
 // UpdateTargetsMeta 批量更新目标对象的元数据（增量更新）
