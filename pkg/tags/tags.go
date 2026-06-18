@@ -61,8 +61,8 @@ func DeleteTagName(targetType, name string) error {
 
 		// Clear the corresponding bit in all tags of this target type
 		bitMask := uint64(1) << (tagName.BitNum - 1)
-		updateSQL := fmt.Sprintf("UPDATE tags SET %s = %s & ~%d WHERE target_type = ?",
-			tagName.CellName, tagName.CellName, bitMask)
+		updateSQL := fmt.Sprintf("UPDATE %s SET %s = %s & ~%d WHERE target_type = ?",
+			(addon.Tags{}).TableName(), tagName.CellName, tagName.CellName, bitMask)
 
 		if err := tx.Exec(updateSQL, targetType).Error; err != nil {
 			return err
@@ -121,7 +121,7 @@ func AddTags(targetType string, tx *gorm.DB, targetID uint, tagNames []string) e
 		}
 
 		// Use strings.Join to create comma-separated SET clause
-		updateSQL := fmt.Sprintf("UPDATE tags SET %s WHERE id = ?", strings.Join(updateParts, ", "))
+		updateSQL := fmt.Sprintf("UPDATE %s SET %s WHERE id = ?", (addon.Tags{}).TableName(), strings.Join(updateParts, ", "))
 
 		if err := tx.Exec(updateSQL, targetTags.ID).Error; err != nil {
 			return err
