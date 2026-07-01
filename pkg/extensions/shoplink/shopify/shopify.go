@@ -37,6 +37,11 @@ var app *shopify.App
 
 var dec100 = decimal.NewFromInt(100)
 
+const (
+	sizeGuideMetafieldNamespace = "effiprint"
+	sizeGuideMetafieldKey       = "size_guide"
+)
+
 func (p *Shopify) Init() error {
 	if !config.Config.Shopify.Enabled {
 		return nil
@@ -388,6 +393,69 @@ func (p *Shopify) PutProduct(credential *types.ShopCredential, product *types.Pr
 	}, nil
 }
 
+func (p *Shopify) UpdateProduct(credential *types.ShopCredential, outerID string, product *types.ProductData, businessContext json.RawMessage) (*types.PutProductResult, error) {
+	var creds ShopifyCredential
+	credData, err := json.Marshal(credential.Data)
+	if err != nil {
+		return nil, usererrors.New(fmt.Sprintf("Failed to marshal credentials: %s", err.Error()))
+	}
+
+	if err := json.Unmarshal(credData, &creds); err != nil {
+		return nil, usererrors.New(fmt.Sprintf("Failed to unmarshal credentials: %s", err.Error()))
+	}
+
+	client, err := shopify.NewClient(*app, creds.Url, creds.AccessToken)
+	if err != nil {
+		return nil, usererrors.New(fmt.Sprintf("Failed to create Shopify client: %s", err.Error()))
+	}
+
+	shopifyProduct, err := p.toShopifyProduct(product)
+	if err != nil {
+		return nil, usererrors.New(fmt.Sprintf("Failed to convert product: %s", err.Error()))
+	}
+
+	productID := cast.ToUint64(outerID)
+	if productID == 0 {
+		return nil, usererrors.New("Invalid Shopify product id")
+	}
+	shopifyProduct.Id = productID
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	productResp, err := client.Product.Update(ctx, shopifyProduct)
+	if err != nil {
+		return nil, usererrors.New(fmt.Sprintf("Failed to update product: %s", err.Error()))
+	}
+
+	productData, err := json.Marshal(product)
+	if err != nil {
+		return nil, usererrors.New(fmt.Sprintf("Failed to marshal product data: %s", err.Error()))
+	}
+
+	db := database.Database()
+	if err := db.Model(&models.ShopProduct{}).
+		Where("platform = ? AND outer_id = ?", "shopify", outerID).
+		Updates(map[string]interface{}{
+			"name":       productResp.Title,
+			"status":     "active",
+			"url":        fmt.Sprintf("https://%s/admin/products/%d", creds.Url, productResp.Id),
+			"data":       productData,
+			"updated_at": time.Now(),
+		}).Error; err != nil {
+		return nil, usererrors.New(fmt.Sprintf("Failed to update shop product: %s", err.Error()))
+	}
+
+	return &types.PutProductResult{
+		CommandResult: types.CommandResult{
+			Success: true,
+			Message: "Product updated successfully",
+		},
+		OuterID: fmt.Sprintf("%d", productResp.Id),
+		Url:     fmt.Sprintf("https://%s/admin/products/%d", creds.Url, productResp.Id),
+	}, nil
+}
+
 func (p *Shopify) DeleteProduct(credential *types.ShopCredential, outerID string) (*types.DeleteProductResult, error) {
 	var creds ShopifyCredential
 	credData, err := json.Marshal(credential.Data)
@@ -520,6 +588,16 @@ func (p *Shopify) toShopifyProduct(product *types.ProductData) (shopify.Product,
 		Tags:           product.Tags,
 		Variants:       variants,
 		Images:         images,
+	}
+
+	if product.SizeGuideEnabled {
+		// 将商品 Size Guide 写入 Shopify 产品 metafield，店铺主题可据此渲染独立 tab。
+		shopifyProduct.Metafields = append(shopifyProduct.Metafields, shopify.Metafield{
+			Namespace: sizeGuideMetafieldNamespace,
+			Key:       sizeGuideMetafieldKey,
+			Type:      shopify.MetafieldTypeMultiLineTextField,
+			Value:     product.SizeGuideHTML,
+		})
 	}
 
 	return shopifyProduct, nil
