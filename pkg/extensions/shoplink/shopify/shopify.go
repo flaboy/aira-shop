@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -176,6 +177,7 @@ func (p *Shopify) HandleCallback(c *pin.Context, businessContext json.RawMessage
 	}
 
 	shopName := shopInfo.Name
+	externalShopID := strconv.FormatUint(shopInfo.Id, 10)
 
 	credentials := ShopifyCredential{
 		Url:         shopUrl,
@@ -189,21 +191,24 @@ func (p *Shopify) HandleCallback(c *pin.Context, businessContext json.RawMessage
 
 	// 直接创建ShopLink模型
 	shopLink := &models.ShopLink{
-		Platform:    "shopify",
-		Name:        shopName,
-		Url:         "https://" + shopUrl,
-		Credentials: credentialsJson,
+		Platform:       "shopify",
+		Name:           shopName,
+		Url:            "https://" + shopUrl,
+		ExternalShopID: externalShopID,
+		Credentials:    credentialsJson,
 	}
 
 	db := database.Database()
 
 	// 检查是否已存在
 	var existing models.ShopLink
-	err = db.Where("name = ? AND platform = ?", shopName, "shopify").First(&existing).Error
+	err = db.Where("external_shop_id = ? AND platform = ?", externalShopID, "shopify").First(&existing).Error
 	if err == nil {
-		// 更新现有记录
+		// Shopify 店铺名称和域名可变，授权复用只以 Shopify shop id 为准。
+		existing.Name = shopName
 		existing.Credentials = credentialsJson
 		existing.Url = "https://" + shopUrl
+		existing.ExternalShopID = externalShopID
 		if err := db.Save(&existing).Error; err != nil {
 			return nil, errors.ErrShopCreation
 		}
