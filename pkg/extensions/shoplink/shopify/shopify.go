@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -509,7 +510,7 @@ func (p *Shopify) UpdateProduct(credential *types.ShopCredential, outerID string
 
 	productResp, err := client.Product.Update(ctx, shopifyProduct)
 	if err != nil {
-		return nil, usererrors.New(fmt.Sprintf("Failed to update product: %s", err.Error()))
+		return nil, normalizeProductUpdateError(err)
 	}
 
 	productData, err := json.Marshal(product)
@@ -538,6 +539,15 @@ func (p *Shopify) UpdateProduct(credential *types.ShopCredential, outerID string
 		OuterID: fmt.Sprintf("%d", productResp.Id),
 		Url:     fmt.Sprintf("https://%s/admin/products/%d", creds.Url, productResp.Id),
 	}, nil
+}
+
+// normalizeProductUpdateError 将 Shopify 404 转为稳定业务文案，供异步发布状态安全返回给商城端。
+func normalizeProductUpdateError(err error) error {
+	var responseErr goshopify.ResponseError
+	if stderrors.As(err, &responseErr) && responseErr.Status == http.StatusNotFound {
+		return stderrors.New("This Shopify product no longer exists. Publish it as a new product instead.")
+	}
+	return fmt.Errorf("Failed to update product: %w", err)
 }
 
 func (p *Shopify) DeleteProduct(credential *types.ShopCredential, outerID string) (*types.DeleteProductResult, error) {
