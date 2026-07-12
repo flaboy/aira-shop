@@ -219,145 +219,150 @@ func ClearTargetsTags(targetType string, targetIDs []uint) error {
 
 // UpdateTargetsTags 批量更新目标对象的标签（增量更新）
 func UpdateTargetsTags(targetType string, targetIDs []uint, tags []string) error {
+	return database.Database().Transaction(func(tx *gorm.DB) error {
+		return UpdateTargetsTagsWithDB(tx, targetType, targetIDs, tags)
+	})
+}
+
+// UpdateTargetsTagsWithDB 在调用方事务内更新标签，确保业务数据与审计日志一起提交。
+func UpdateTargetsTagsWithDB(tx *gorm.DB, targetType string, targetIDs []uint, tags []string) error {
 	if len(targetIDs) == 0 {
 		return nil
 	}
 
-	return database.Database().Transaction(func(tx *gorm.DB) error {
-		// 1. 获取所有标签名称的配置信息
-		var tagNames []addon.TagNames
-		err := tx.Where("target_type = ? AND name IN ?", targetType, tags).
-			Find(&tagNames).Error
+	// 1. 获取所有标签名称的配置信息
+	var tagNames []addon.TagNames
+	err := tx.Where("target_type = ? AND name IN ?", targetType, tags).
+		Find(&tagNames).Error
+	if err != nil {
+		return err
+	}
+
+	// 构建标签名称到配置的映射
+	tagNameMap := make(map[string]*addon.TagNames)
+	for i := range tagNames {
+		tagName := &tagNames[i]
+		tagNameMap[tagName.Name] = tagName
+	}
+
+	// 检查是否有不存在的标签
+	for _, tag := range tags {
+		if _, exists := tagNameMap[tag]; !exists {
+			return fmt.Errorf("tag not found: %s", tag)
+		}
+	}
+
+	// 2. 获取所有目标对象当前的 Tags 记录
+	var existingTags []addon.Tags
+	err = tx.Where("target_type = ? AND target_id IN ?", targetType, targetIDs).
+		Find(&existingTags).Error
+	if err != nil {
+		return err
+	}
+
+	// 构建目标ID到Tags记录的映射
+	existingTagsMap := make(map[uint]*addon.Tags)
+	for i := range existingTags {
+		tag := &existingTags[i]
+		existingTagsMap[tag.TargetID] = tag
+	}
+
+	// 3. 为每个目标对象处理标签
+	var tagsToCreate []addon.Tags
+	var tagsToUpdate []addon.Tags
+
+	for _, targetID := range targetIDs {
+		// 计算新的 Cell 值
+		newCellValues := [16]uint{}
+
+		for _, tagName := range tags {
+			tagConfig := tagNameMap[tagName]
+
+			// 解析 Cell 编号
+			var cellIndex int
+			if _, err := fmt.Sscanf(tagConfig.CellName, "Cell%d", &cellIndex); err != nil {
+				continue
+			}
+			cellIndex-- // 转换为0基索引
+
+			if cellIndex < 0 || cellIndex >= 16 {
+				continue
+			}
+
+			// 计算位掩码并设置对应位
+			bitMask := uint(1) << (tagConfig.BitNum - 1)
+			newCellValues[cellIndex] |= bitMask
+		}
+
+		if existingTag, exists := existingTagsMap[targetID]; exists {
+			// 更新现有记录
+			existingTag.Cell1 = newCellValues[0]
+			existingTag.Cell2 = newCellValues[1]
+			existingTag.Cell3 = newCellValues[2]
+			existingTag.Cell4 = newCellValues[3]
+			existingTag.Cell5 = newCellValues[4]
+			existingTag.Cell6 = newCellValues[5]
+			existingTag.Cell7 = newCellValues[6]
+			existingTag.Cell8 = newCellValues[7]
+			existingTag.Cell9 = newCellValues[8]
+			existingTag.Cell10 = newCellValues[9]
+			existingTag.Cell11 = newCellValues[10]
+			existingTag.Cell12 = newCellValues[11]
+			existingTag.Cell13 = newCellValues[12]
+			existingTag.Cell14 = newCellValues[13]
+			existingTag.Cell15 = newCellValues[14]
+			existingTag.Cell16 = newCellValues[15]
+
+			tagsToUpdate = append(tagsToUpdate, *existingTag)
+		} else {
+			// 创建新记录
+			newTag := addon.Tags{
+				TargetID:   targetID,
+				TargetType: targetType,
+				Cell1:      newCellValues[0],
+				Cell2:      newCellValues[1],
+				Cell3:      newCellValues[2],
+				Cell4:      newCellValues[3],
+				Cell5:      newCellValues[4],
+				Cell6:      newCellValues[5],
+				Cell7:      newCellValues[6],
+				Cell8:      newCellValues[7],
+				Cell9:      newCellValues[8],
+				Cell10:     newCellValues[9],
+				Cell11:     newCellValues[10],
+				Cell12:     newCellValues[11],
+				Cell13:     newCellValues[12],
+				Cell14:     newCellValues[13],
+				Cell15:     newCellValues[14],
+				Cell16:     newCellValues[15],
+			}
+			tagsToCreate = append(tagsToCreate, newTag)
+		}
+	}
+
+	// 4. 执行批量操作
+	if len(tagsToCreate) > 0 {
+		err = tx.Create(&tagsToCreate).Error
 		if err != nil {
 			return err
 		}
+	}
 
-		// 构建标签名称到配置的映射
-		tagNameMap := make(map[string]*addon.TagNames)
-		for i := range tagNames {
-			tagName := &tagNames[i]
-			tagNameMap[tagName.Name] = tagName
-		}
-
-		// 检查是否有不存在的标签
-		for _, tag := range tags {
-			if _, exists := tagNameMap[tag]; !exists {
-				return err
-			}
-		}
-
-		// 2. 获取所有目标对象当前的 Tags 记录
-		var existingTags []addon.Tags
-		err = tx.Where("target_type = ? AND target_id IN ?", targetType, targetIDs).
-			Find(&existingTags).Error
-		if err != nil {
-			return err
-		}
-
-		// 构建目标ID到Tags记录的映射
-		existingTagsMap := make(map[uint]*addon.Tags)
-		for i := range existingTags {
-			tag := &existingTags[i]
-			existingTagsMap[tag.TargetID] = tag
-		}
-
-		// 3. 为每个目标对象处理标签
-		var tagsToCreate []addon.Tags
-		var tagsToUpdate []addon.Tags
-
-		for _, targetID := range targetIDs {
-			// 计算新的 Cell 值
-			newCellValues := [16]uint{}
-
-			for _, tagName := range tags {
-				tagConfig := tagNameMap[tagName]
-
-				// 解析 Cell 编号
-				var cellIndex int
-				if _, err := fmt.Sscanf(tagConfig.CellName, "Cell%d", &cellIndex); err != nil {
-					continue
-				}
-				cellIndex-- // 转换为0基索引
-
-				if cellIndex < 0 || cellIndex >= 16 {
-					continue
-				}
-
-				// 计算位掩码并设置对应位
-				bitMask := uint(1) << (tagConfig.BitNum - 1)
-				newCellValues[cellIndex] |= bitMask
-			}
-
-			if existingTag, exists := existingTagsMap[targetID]; exists {
-				// 更新现有记录
-				existingTag.Cell1 = newCellValues[0]
-				existingTag.Cell2 = newCellValues[1]
-				existingTag.Cell3 = newCellValues[2]
-				existingTag.Cell4 = newCellValues[3]
-				existingTag.Cell5 = newCellValues[4]
-				existingTag.Cell6 = newCellValues[5]
-				existingTag.Cell7 = newCellValues[6]
-				existingTag.Cell8 = newCellValues[7]
-				existingTag.Cell9 = newCellValues[8]
-				existingTag.Cell10 = newCellValues[9]
-				existingTag.Cell11 = newCellValues[10]
-				existingTag.Cell12 = newCellValues[11]
-				existingTag.Cell13 = newCellValues[12]
-				existingTag.Cell14 = newCellValues[13]
-				existingTag.Cell15 = newCellValues[14]
-				existingTag.Cell16 = newCellValues[15]
-
-				tagsToUpdate = append(tagsToUpdate, *existingTag)
-			} else {
-				// 创建新记录
-				newTag := addon.Tags{
-					TargetID:   targetID,
-					TargetType: targetType,
-					Cell1:      newCellValues[0],
-					Cell2:      newCellValues[1],
-					Cell3:      newCellValues[2],
-					Cell4:      newCellValues[3],
-					Cell5:      newCellValues[4],
-					Cell6:      newCellValues[5],
-					Cell7:      newCellValues[6],
-					Cell8:      newCellValues[7],
-					Cell9:      newCellValues[8],
-					Cell10:     newCellValues[9],
-					Cell11:     newCellValues[10],
-					Cell12:     newCellValues[11],
-					Cell13:     newCellValues[12],
-					Cell14:     newCellValues[13],
-					Cell15:     newCellValues[14],
-					Cell16:     newCellValues[15],
-				}
-				tagsToCreate = append(tagsToCreate, newTag)
-			}
-		}
-
-		// 4. 执行批量操作
-		if len(tagsToCreate) > 0 {
-			err = tx.Create(&tagsToCreate).Error
+	if len(tagsToUpdate) > 0 {
+		for _, tag := range tagsToUpdate {
+			err = tx.Model(&addon.Tags{}).Where("id = ?", tag.ID).Updates(map[string]interface{}{
+				"cell1": tag.Cell1, "cell2": tag.Cell2, "cell3": tag.Cell3, "cell4": tag.Cell4,
+				"cell5": tag.Cell5, "cell6": tag.Cell6, "cell7": tag.Cell7, "cell8": tag.Cell8,
+				"cell9": tag.Cell9, "cell10": tag.Cell10, "cell11": tag.Cell11, "cell12": tag.Cell12,
+				"cell13": tag.Cell13, "cell14": tag.Cell14, "cell15": tag.Cell15, "cell16": tag.Cell16,
+			}).Error
 			if err != nil {
 				return err
 			}
 		}
+	}
 
-		if len(tagsToUpdate) > 0 {
-			for _, tag := range tagsToUpdate {
-				err = tx.Model(&addon.Tags{}).Where("id = ?", tag.ID).Updates(map[string]interface{}{
-					"cell1": tag.Cell1, "cell2": tag.Cell2, "cell3": tag.Cell3, "cell4": tag.Cell4,
-					"cell5": tag.Cell5, "cell6": tag.Cell6, "cell7": tag.Cell7, "cell8": tag.Cell8,
-					"cell9": tag.Cell9, "cell10": tag.Cell10, "cell11": tag.Cell11, "cell12": tag.Cell12,
-					"cell13": tag.Cell13, "cell14": tag.Cell14, "cell15": tag.Cell15, "cell16": tag.Cell16,
-				}).Error
-				if err != nil {
-					return err
-				}
-			}
-		}
-
-		return nil
-	})
+	return nil
 }
 
 // Helper function to find the first available bit position
