@@ -28,6 +28,7 @@ import (
 	awsConfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 	goshopify "github.com/bold-commerce/go-shopify/v4"
 	shopify "github.com/bold-commerce/go-shopify/v4"
 	"github.com/flaboy/aira-web/pkg/helper"
@@ -140,6 +141,7 @@ func (p *Shopify) subscribeWebhooks(client *shopify.Client) error {
 type ShopifyCredential struct {
 	Url         string
 	AccessToken string
+	ShopLinkID  uint
 }
 
 func (p *Shopify) HandleCallback(c *pin.Context, businessContext json.RawMessage, callbackUrl *url.URL) (*types.CallbackResponse, error) {
@@ -276,6 +278,9 @@ type ShopifyRemoteData struct {
 }
 
 func (p *Shopify) PutProduct(credential *types.ShopCredential, product *types.ProductData, businessContext json.RawMessage) (*types.PutProductResult, error) {
+	if product.OriginProductID == "" || product.PublishOperationID == "" || product.ExternalShopID == "" {
+		return nil, usererrors.New("Shopify product publish identity is incomplete")
+	}
 	// Unmarshal the credentials
 	var creds ShopifyCredential
 	credData, err := json.Marshal(credential.Data)
@@ -320,41 +325,97 @@ func (p *Shopify) PutProduct(credential *types.ShopCredential, product *types.Pr
 
 	productResp, err := client.Product.Create(ctx, newProduct)
 	if err != nil {
+		recoveryCtx, recoveryCancel := context.WithTimeout(context.Background(), 120*time.Second)
+		defer recoveryCancel()
+		matches, auditErr := findProductsByPublishOperation(recoveryCtx, client, product.PublishOperationID)
+		if auditErr != nil {
+			return nil, &types.PublishResultUncertainError{Cause: fmt.Errorf("Shopify product creation result is uncertain and cannot be audited: %w", auditErr)}
+		}
+		if len(matches) > 1 {
+			return nil, &types.PublishResultUncertainError{Cause: fmt.Errorf("Shopify product creation produced %d products for operation %s", len(matches), product.PublishOperationID)}
+		}
+		if len(matches) == 0 {
+			return nil, &types.PublishResultUncertainError{Cause: fmt.Errorf("Shopify product creation result is uncertain for operation %s: %w", product.PublishOperationID, err)}
+		}
+		if len(matches) == 1 {
+			if deleteErr := deleteAndVerifyShopifyProduct(recoveryCtx, client, matches[0].Id); deleteErr != nil {
+				return nil, &types.PublishResultUncertainError{Cause: fmt.Errorf("failed to remove uncertain Shopify product %d: %w", matches[0].Id, deleteErr)}
+			}
+		}
 		return nil, usererrors.New(fmt.Sprintf("Failed to create product: %s", err.Error()))
+	}
+	verifiedProduct, err := client.Product.Get(ctx, productResp.Id, nil)
+	if err != nil {
+		if deleteErr := cleanupCreatedShopifyProduct(client, productResp.Id); deleteErr != nil {
+			return nil, &types.PublishResultUncertainError{Cause: fmt.Errorf("failed to delete unverified Shopify product %d: %w", productResp.Id, deleteErr)}
+		}
+		return nil, usererrors.New(fmt.Sprintf("Failed to verify created Shopify product %d: %s", productResp.Id, err.Error()))
+	}
+	metafields, err := client.Product.ListMetafields(ctx, productResp.Id, nil)
+	if err != nil {
+		if deleteErr := cleanupCreatedShopifyProduct(client, productResp.Id); deleteErr != nil {
+			return nil, &types.PublishResultUncertainError{Cause: fmt.Errorf("failed to delete Shopify product %d after identity verification failure: %w", productResp.Id, deleteErr)}
+		}
+		return nil, usererrors.New(fmt.Sprintf("Failed to read Shopify product %d identity: %s", productResp.Id, err.Error()))
+	}
+	verifiedIdentity := map[string]string{}
+	for _, metafield := range metafields {
+		if metafield.Namespace == "effiprint" {
+			verifiedIdentity[metafield.Key] = fmt.Sprint(metafield.Value)
+		}
+	}
+	if verifiedIdentity["origin_product_id"] != product.OriginProductID || verifiedIdentity["publish_operation_id"] != product.PublishOperationID || verifiedIdentity["external_shop_id"] != product.ExternalShopID {
+		if deleteErr := cleanupCreatedShopifyProduct(client, productResp.Id); deleteErr != nil {
+			return nil, &types.PublishResultUncertainError{Cause: fmt.Errorf("failed to delete Shopify product %d with invalid identity: %w", productResp.Id, deleteErr)}
+		}
+		return nil, usererrors.New(fmt.Sprintf("Shopify product %d identity verification failed", productResp.Id))
 	}
 
 	ShopifyRemoteData := &ShopifyRemoteData{
 		VariantMapper: make(map[uint64]uint),
 	}
 
-	for _, variant := range productResp.Variants {
+	for _, variant := range verifiedProduct.Variants {
 		optionUniqId := p.variantUniqId(&variant)
 		if variantId, ok := variantMap[optionUniqId]; ok {
 			ShopifyRemoteData.VariantMapper[variant.Id] = variantId
 		}
 	}
+	if len(ShopifyRemoteData.VariantMapper) != len(newProduct.Variants) {
+		if deleteErr := cleanupCreatedShopifyProduct(client, productResp.Id); deleteErr != nil {
+			return nil, &types.PublishResultUncertainError{Cause: fmt.Errorf("failed to delete incomplete Shopify product %d: %w", productResp.Id, deleteErr)}
+		}
+		return nil, usererrors.New(fmt.Sprintf("Shopify variant mapping is incomplete: expected %d, mapped %d", len(newProduct.Variants), len(ShopifyRemoteData.VariantMapper)))
+	}
 
 	// 获取店铺ID
 	var shop models.ShopLink
 	db := database.Database()
-	err = db.Where("platform = ? AND url = ?", "shopify", "https://"+creds.Url).First(&shop).Error
+	err = db.Where("id = ? AND platform = ?", creds.ShopLinkID, "shopify").First(&shop).Error
 	if err != nil {
+		if deleteErr := cleanupCreatedShopifyProduct(client, productResp.Id); deleteErr != nil {
+			return nil, &types.PublishResultUncertainError{Cause: fmt.Errorf("failed to delete Shopify product %d after authorization lookup failure: %w", productResp.Id, deleteErr)}
+		}
 		return nil, usererrors.New(fmt.Sprintf("Failed to find shop: %s", err.Error()))
 	}
 
 	// 保存产品信息
 	shopProduct := models.ShopProduct{
-		ShopID:   shop.ID,
-		OuterID:  fmt.Sprintf("%d", productResp.Id),
-		Status:   "active",
-		Url:      fmt.Sprintf("https://%s/admin/products/%d", creds.Url, productResp.Id),
-		Name:     productResp.Title,
-		Platform: "shopify",
+		ShopID:             shop.ID,
+		PublishOperationID: product.PublishOperationID,
+		OuterID:            fmt.Sprintf("%d", productResp.Id),
+		Status:             "active",
+		Url:                fmt.Sprintf("https://%s/admin/products/%d", creds.Url, productResp.Id),
+		Name:               productResp.Title,
+		Platform:           "shopify",
 	}
 
 	// 序列化产品数据
 	productData, err := json.Marshal(product)
 	if err != nil {
+		if deleteErr := cleanupCreatedShopifyProduct(client, productResp.Id); deleteErr != nil {
+			return nil, &types.PublishResultUncertainError{Cause: fmt.Errorf("failed to delete Shopify product %d after product data failure: %w", productResp.Id, deleteErr)}
+		}
 		return nil, usererrors.New(fmt.Sprintf("Failed to marshal product data: %s", err.Error()))
 	}
 	shopProduct.Data = productData
@@ -362,13 +423,12 @@ func (p *Shopify) PutProduct(credential *types.ShopCredential, product *types.Pr
 	// 序列化远程数据
 	remoteData, err := json.Marshal(ShopifyRemoteData)
 	if err != nil {
+		if deleteErr := cleanupCreatedShopifyProduct(client, productResp.Id); deleteErr != nil {
+			return nil, &types.PublishResultUncertainError{Cause: fmt.Errorf("failed to delete Shopify product %d after variant data failure: %w", productResp.Id, deleteErr)}
+		}
 		return nil, usererrors.New(fmt.Sprintf("Failed to marshal remote data: %s", err.Error()))
 	}
 	shopProduct.RemoteData = remoteData
-
-	if err := db.Create(&shopProduct).Error; err != nil {
-		return nil, usererrors.New(fmt.Sprintf("Failed to create shop product: %s", err.Error()))
-	}
 
 	// 触发产品发布事件
 	productDataMap := map[string]interface{}{
@@ -377,24 +437,43 @@ func (p *Shopify) PutProduct(credential *types.ShopCredential, product *types.Pr
 		"tags":         product.Tags,
 	}
 
-	events.EmitProductPublished(&types.ProductPublishedEvent{
-		ShopProductID:   shopProduct.ID,
-		ShopID:          shop.ID,
-		Platform:        "shopify",
-		OuterID:         fmt.Sprintf("%d", productResp.Id),
-		ProductData:     productDataMap,
-		BusinessContext: businessContext,
-		CreatedAt:       time.Now(),
-	})
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&shopProduct).Error; err != nil {
+			return err
+		}
+		variantMappings := make([]models.ShopifyVariantMapping, 0, len(ShopifyRemoteData.VariantMapper))
+		for shopifyVariantID, localVariantID := range ShopifyRemoteData.VariantMapper {
+			variantMappings = append(variantMappings, models.ShopifyVariantMapping{
+				ShopID: shop.ID, ShopProductID: shopProduct.ID,
+				ShopifyVariantID: shopifyVariantID, LocalVariantID: localVariantID,
+			})
+		}
+		if len(variantMappings) != len(newProduct.Variants) {
+			return fmt.Errorf("Shopify variant mapping transaction is incomplete")
+		}
+		if err := tx.Create(&variantMappings).Error; err != nil {
+			return err
+		}
+		return events.EmitProductPublishedTx(tx, &types.ProductPublishedEvent{
+			ShopProductID: shopProduct.ID, ShopID: shop.ID, Platform: "shopify", OuterID: fmt.Sprintf("%d", productResp.Id),
+			ProductData: productDataMap, BusinessContext: businessContext, CreatedAt: time.Now(),
+		})
+	}); err != nil {
+		if deleteErr := cleanupCreatedShopifyProduct(client, productResp.Id); deleteErr != nil {
+			return nil, &types.PublishResultUncertainError{Cause: fmt.Errorf("failed to delete Shopify product %d after mapping failure: %w", productResp.Id, deleteErr)}
+		}
+		return nil, usererrors.New(fmt.Sprintf("Failed to save Shopify product mapping: %s", err.Error()))
+	}
 
 	return &types.PutProductResult{
 		CommandResult: types.CommandResult{
 			Success: true,
 			Message: "Product created successfully",
 		},
-		OuterID:    fmt.Sprintf("%d", productResp.Id),
-		Url:        fmt.Sprintf("https://%s/admin/products/%d", creds.Url, productResp.Id),
-		RemoteData: ShopifyRemoteData,
+		OuterID:       fmt.Sprintf("%d", productResp.Id),
+		ShopProductID: shopProduct.ID,
+		Url:           fmt.Sprintf("https://%s/admin/products/%d", creds.Url, productResp.Id),
+		RemoteData:    ShopifyRemoteData,
 	}, nil
 }
 
@@ -485,7 +564,7 @@ func (p *Shopify) DeleteProduct(credential *types.ShopCredential, outerID string
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	if err := client.Product.Delete(ctx, productID); err != nil {
+	if err := deleteAndVerifyShopifyProduct(ctx, client, productID); err != nil {
 		return nil, usererrors.New(fmt.Sprintf("Failed to delete product: %s", err.Error()))
 	}
 
@@ -594,6 +673,25 @@ func (p *Shopify) toShopifyProduct(product *types.ProductData) (shopify.Product,
 		Variants:       variants,
 		Images:         images,
 	}
+	identityMetafields := []struct {
+		key   string
+		value string
+	}{
+		{key: "origin_product_id", value: product.OriginProductID},
+		{key: "publish_operation_id", value: product.PublishOperationID},
+		{key: "external_shop_id", value: product.ExternalShopID},
+	}
+	for _, identity := range identityMetafields {
+		if identity.value == "" {
+			continue
+		}
+		shopifyProduct.Metafields = append(shopifyProduct.Metafields, shopify.Metafield{
+			Namespace: "effiprint",
+			Key:       identity.key,
+			Type:      shopify.MetafieldTypeSingleLineTextField,
+			Value:     identity.value,
+		})
+	}
 
 	if product.SizeGuideEnabled {
 		// 将商品 Size Guide 写入 Shopify 产品 metafield，店铺主题可据此渲染独立 tab。
@@ -643,6 +741,18 @@ func (p *Shopify) StartEventListener() {
 
 	client := sqs.NewFromConfig(cfg)
 	fmt.Printf("AWS SQS client created successfully for queue: %s\n", config.Config.Shopify.SQSQueueURL)
+	queueAttributes, err := client.GetQueueAttributes(ctx, &sqs.GetQueueAttributesInput{
+		QueueUrl:       aws.String(config.Config.Shopify.SQSQueueURL),
+		AttributeNames: []sqstypes.QueueAttributeName{sqstypes.QueueAttributeNameRedrivePolicy},
+	})
+	if err != nil {
+		fmt.Printf("Error reading Shopify SQS redrive policy: %v\n", err)
+		return
+	}
+	if queueAttributes.Attributes[string(sqstypes.QueueAttributeNameRedrivePolicy)] == "" {
+		fmt.Println("Shopify SQS consumer stopped: queue redrive policy and DLQ are required")
+		return
+	}
 
 	for {
 		// 接收消息
@@ -650,6 +760,7 @@ func (p *Shopify) StartEventListener() {
 			QueueUrl:            aws.String(config.Config.Shopify.SQSQueueURL),
 			MaxNumberOfMessages: 10,
 			WaitTimeSeconds:     20, // 使用长轮询
+			VisibilityTimeout:   900,
 		})
 
 		if err != nil {
@@ -687,6 +798,13 @@ func (p *Shopify) StartEventListener() {
 			if err := json.Unmarshal([]byte(*message.Body), &eventBridgeMessage); err != nil {
 				fmt.Printf("Error unmarshaling EventBridge message %s: %v\n", *message.MessageId, err)
 				fmt.Printf("Message body: %s\n", *message.Body)
+				if storedEvent, _, busy, storeErr := beginShopifyEvent(*message.MessageId, *message.MessageId, "invalid", "", json.RawMessage(*message.Body)); storeErr != nil {
+					fmt.Printf("Error recording invalid Shopify event %s: %v\n", *message.MessageId, storeErr)
+				} else if !busy {
+					if storeErr := finishShopifyEvent(*message.MessageId, storedEvent.ProcessingToken, "failed", err); storeErr != nil {
+						fmt.Printf("Error recording invalid Shopify event result %s: %v\n", *message.MessageId, storeErr)
+					}
+				}
 				continue
 			}
 
@@ -698,50 +816,44 @@ func (p *Shopify) StartEventListener() {
 			fmt.Printf("EventBridge message details - Version: %s, Time: %s, Region: %s\n",
 				eventBridgeMessage.Version, eventBridgeMessage.Time, eventBridgeMessage.Region)
 
-			// 根据topic类型处理不同的webhook事件
-			switch topic {
-			case "orders/create":
-				fmt.Println("Handling orders/create event")
-				if err := p.handleOrderCreate(payload); err != nil {
-					fmt.Printf("Error handling orders/create event: %v\n", err)
-				} else {
-					fmt.Println("Successfully handled orders/create event")
+			eventID := eventBridgeMessage.ID
+			if eventID == "" {
+				eventID = *message.MessageId
+			}
+			externalShopID := ""
+			var identityErr error
+			if isHandledShopifyOrderTopic(topic) {
+				externalShopID, identityErr = resolveShopifyEventExternalShopID(payload)
+			}
+			storedEvent, terminal, busy, err := beginShopifyEvent(eventID, *message.MessageId, topic, externalShopID, json.RawMessage(*message.Body))
+			if err != nil {
+				fmt.Printf("Error starting Shopify event %s: %v\n", eventID, err)
+				continue
+			}
+			if busy {
+				continue
+			}
+			if !terminal {
+				if identityErr != nil {
+					if err := finishShopifyEvent(eventID, storedEvent.ProcessingToken, "failed", identityErr); err != nil {
+						fmt.Printf("Error recording Shopify event identity failure %s: %v\n", eventID, err)
+					}
+					continue
 				}
-			case "orders/updated":
-				fmt.Println("Handling orders/updated event")
-				if err := p.handleOrderUpdate(payload); err != nil {
-					fmt.Printf("Error handling orders/updated event: %v\n", err)
-				} else {
-					fmt.Println("Successfully handled orders/updated event")
+				status, processErr := p.handleWebhookTopic(topic, payload)
+				if err := finishShopifyEvent(eventID, storedEvent.ProcessingToken, status, processErr); err != nil {
+					fmt.Printf("Error finishing Shopify event %s: %v\n", eventID, err)
+					continue
 				}
-			case "orders/paid":
-				fmt.Println("Handling orders/paid event")
-				if err := p.handleOrderPaid(payload); err != nil {
-					fmt.Printf("Error handling orders/paid event: %v\n", err)
-				} else {
-					fmt.Println("Successfully handled orders/paid event")
+				if processErr != nil {
+					fmt.Printf("Error handling Shopify event %s (%s): %v\n", eventID, topic, processErr)
+					continue
 				}
-			case "orders/cancelled":
-				fmt.Println("Handling orders/cancelled event")
-				if err := p.handleOrderCancelled(payload); err != nil {
-					fmt.Printf("Error handling orders/cancelled event: %v\n", err)
-				} else {
-					fmt.Println("Successfully handled orders/cancelled event")
-				}
-			case "orders/fulfilled":
-				fmt.Println("Handling orders/fulfilled event")
-				if err := p.handleOrderFulfilled(payload); err != nil {
-					fmt.Printf("Error handling orders/fulfilled event: %v\n", err)
-				} else {
-					fmt.Println("Successfully handled orders/fulfilled event")
-				}
-			default:
-				fmt.Printf("Unknown webhook topic: %s, skipping\n", topic)
 			}
 
-			// 删除消息
+			// 只有成功或明确忽略的终态事件才能确认 SQS 消息。
 			fmt.Printf("Deleting processed message: %s\n", *message.MessageId)
-			_, err := client.DeleteMessage(ctx, &sqs.DeleteMessageInput{
+			_, err = client.DeleteMessage(ctx, &sqs.DeleteMessageInput{
 				QueueUrl:      aws.String(config.Config.Shopify.SQSQueueURL),
 				ReceiptHandle: message.ReceiptHandle,
 			})
@@ -752,6 +864,37 @@ func (p *Shopify) StartEventListener() {
 				fmt.Printf("Successfully deleted message: %s\n", *message.MessageId)
 			}
 		}
+	}
+}
+
+func (p *Shopify) handleWebhookTopic(topic string, payload json.RawMessage) (string, error) {
+	var err error
+	switch topic {
+	case "orders/create":
+		err = p.handleOrderCreate(payload)
+	case "orders/updated":
+		err = p.handleOrderUpdate(payload)
+	case "orders/paid":
+		err = p.handleOrderPaid(payload)
+	case "orders/cancelled":
+		err = p.handleOrderCancelled(payload)
+	case "orders/fulfilled":
+		err = p.handleOrderFulfilled(payload)
+	default:
+		return "ignored", nil
+	}
+	if err != nil {
+		return "failed", err
+	}
+	return "success", nil
+}
+
+func isHandledShopifyOrderTopic(topic string) bool {
+	switch topic {
+	case "orders/create", "orders/updated", "orders/paid", "orders/cancelled", "orders/fulfilled":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -881,23 +1024,16 @@ func (p *Shopify) handleOrderCreate(event json.RawMessage) error {
 		}
 
 		if !ok {
-			fmt.Printf("Shop product not found for product ID %d, skipping line item %d\n", item.ProductId, item.Id)
-			continue
+			return fmt.Errorf("shop product mapping not found for Shopify product %d", item.ProductId)
 		}
 
 		fmt.Printf("Found matching shop product: %s (Shop ID: %d)\n", product.Name, product.ShopID)
 
-		rm := ShopifyRemoteData{}
-		if err = json.Unmarshal(product.RemoteData, &rm); err != nil {
-			fmt.Printf("Error unmarshaling remote data for product %s: %v\n", product.Name, err)
-			return err
+		var variantMapping models.ShopifyVariantMapping
+		if err := database.Database().Where("shop_id = ? AND shop_product_id = ? AND shopify_variant_id = ?", product.ShopID, product.ID, item.VariantId).First(&variantMapping).Error; err != nil {
+			return fmt.Errorf("variant mapping not found for Shopify variant %d: %w", item.VariantId, err)
 		}
-
-		variantId, ok := rm.VariantMapper[item.VariantId]
-		if !ok {
-			fmt.Printf("Variant ID %d not found in variant mapper, skipping line item\n", item.VariantId)
-			continue
-		}
+		variantId := variantMapping.LocalVariantID
 
 		fmt.Printf("Mapped Shopify variant ID %d to internal variant ID %d\n", item.VariantId, variantId)
 

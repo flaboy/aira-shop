@@ -20,6 +20,8 @@ type ShopPlatform interface {
 
 	// 从平台删除产品
 	DeleteProduct(credential *types.ShopCredential, outerID string) (*types.DeleteProductResult, error)
+	AuditProducts(credential *types.ShopCredential, externalShopID string) ([]types.ProductAuditIssue, error)
+	CleanupPublishOperation(credential *types.ShopCredential, operationID string) error
 
 	// 处理公开请求（如OAuth授权）
 	HandleRequest(c *pin.Context, path string) (*types.HandleRequestResult, error)

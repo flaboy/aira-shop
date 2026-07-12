@@ -8,17 +8,18 @@ import (
 )
 
 type ShopProduct struct {
-	ID         uint            `gorm:"primaryKey"`
-	ShopID     uint            `gorm:"index"`
-	OuterID    string          `gorm:"size:255;index"`
-	Status     string          `gorm:"size:50;default:'pending'"`
-	Url        string          `gorm:"size:500"`
-	Name       string          `gorm:"size:255"`
-	Platform   string          `gorm:"size:50;index"`
-	Data       json.RawMessage `gorm:"type:text"`
-	RemoteData json.RawMessage `gorm:"type:text"`
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	ID                 uint            `gorm:"primaryKey"`
+	ShopID             uint            `gorm:"index"`
+	PublishOperationID string          `gorm:"size:36;index"`
+	OuterID            string          `gorm:"size:255;index"`
+	Status             string          `gorm:"size:50;default:'pending'"`
+	Url                string          `gorm:"size:500"`
+	Name               string          `gorm:"size:255"`
+	Platform           string          `gorm:"size:50;index"`
+	Data               json.RawMessage `gorm:"type:text"`
+	RemoteData         json.RawMessage `gorm:"type:text"`
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 func (s *ShopProduct) TableName() string {

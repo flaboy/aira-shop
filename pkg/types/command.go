@@ -38,12 +38,34 @@ type PutProductResult struct {
 	CommandResult CommandResult `json:"command_result"`
 	Url           string        `json:"url"`
 	OuterID       string        `json:"outer_id"`
+	ShopProductID uint          `json:"shop_product_id"`
 	RemoteData    interface{}   `json:"remote_data"`
 }
 
 type DeleteProductResult struct {
 	CommandResult CommandResult `json:"command_result"`
 	OuterID       string        `json:"outer_id"`
+}
+
+type ProductAuditIssue struct {
+	Type             string `json:"type"`
+	ShopifyProductID string `json:"shopify_product_id"`
+	ShopProductID    uint   `json:"shop_product_id,omitempty"`
+	OriginProductID  string `json:"origin_product_id,omitempty"`
+	OperationID      string `json:"operation_id,omitempty"`
+	Message          string `json:"message"`
+}
+
+type PublishResultUncertainError struct {
+	Cause error
+}
+
+func (e *PublishResultUncertainError) Error() string {
+	return e.Cause.Error()
+}
+
+func (e *PublishResultUncertainError) Unwrap() error {
+	return e.Cause
 }
 
 type ShopCredential struct {
@@ -64,16 +86,19 @@ func (c *ShopCredential) IsValid() bool {
 }
 
 type ProductData struct {
-	ProductName      string           `json:"product_name"`
-	BodyHTML         string           `json:"body_html"`
-	Tags             string           `json:"tags"`
-	SizeGuideEnabled bool             `json:"size_guide_enabled"`
-	SizeGuideHTML    string           `json:"size_guide_html"`
-	Image            ProductImage     `json:"image"`
-	Images           []ProductImage   `json:"images"`
-	Options          []ProductOption  `json:"options"`
-	Variants         []ProductVariant `json:"variants"`
-	BusinessContext  interface{}      `json:"business_context"`
+	ProductName        string           `json:"product_name"`
+	PublishOperationID string           `json:"publish_operation_id"`
+	OriginProductID    string           `json:"origin_product_id"`
+	ExternalShopID     string           `json:"external_shop_id"`
+	BodyHTML           string           `json:"body_html"`
+	Tags               string           `json:"tags"`
+	SizeGuideEnabled   bool             `json:"size_guide_enabled"`
+	SizeGuideHTML      string           `json:"size_guide_html"`
+	Image              ProductImage     `json:"image"`
+	Images             []ProductImage   `json:"images"`
+	Options            []ProductOption  `json:"options"`
+	Variants           []ProductVariant `json:"variants"`
+	BusinessContext    interface{}      `json:"business_context"`
 }
 
 type ProductImage struct {

@@ -2,9 +2,12 @@ package events
 
 import "github.com/flaboy/aira-shop/pkg/types"
 
+import "gorm.io/gorm"
+
 type EventHandler interface {
 	OnShopConnected(event *types.ShopConnectedEvent) error
 	OnProductPublished(event *types.ProductPublishedEvent) error
+	OnProductPublishedTx(tx *gorm.DB, event *types.ProductPublishedEvent) error
 	OnOrderReceived(event *types.OrderReceivedEvent) error
 	OnOrderUpdated(event *types.OrderStatusChangedEvent) error
 	OnOrderCancelled(event *types.OrderStatusChangedEvent) error
@@ -28,6 +31,13 @@ func EmitShopConnected(event *types.ShopConnectedEvent) error {
 func EmitProductPublished(event *types.ProductPublishedEvent) error {
 	if handler != nil {
 		return handler.OnProductPublished(event)
+	}
+	return nil
+}
+
+func EmitProductPublishedTx(tx *gorm.DB, event *types.ProductPublishedEvent) error {
+	if handler != nil {
+		return handler.OnProductPublishedTx(tx, event)
 	}
 	return nil
 }
