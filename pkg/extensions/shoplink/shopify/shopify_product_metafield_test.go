@@ -1,11 +1,25 @@
 package shopify
 
 import (
+	"os"
+	"strings"
 	"testing"
 
 	goshopify "github.com/bold-commerce/go-shopify/v4"
 	"github.com/flaboy/aira-shop/pkg/types"
 )
+
+func TestPutProductUsesConfiguredHTTPClient(t *testing.T) {
+	content, err := os.ReadFile("shopify.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	clientCall := "shopify.NewClient(*app, creds.Url, creds.AccessToken, shopify.WithHTTPClient(p.httpClient))"
+	if !strings.Contains(string(content), clientCall) {
+		t.Fatal("商品发布必须使用 Shopify 适配器统一配置的 HTTP Client")
+	}
+}
 
 func TestToShopifyProductAddsSizeGuideMetafield(t *testing.T) {
 	product, err := (&Shopify{}).toShopifyProduct(&types.ProductData{

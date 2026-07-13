@@ -293,8 +293,8 @@ func (p *Shopify) PutProduct(credential *types.ShopCredential, product *types.Pr
 		return nil, usererrors.New(fmt.Sprintf("Failed to unmarshal credentials: %s", err.Error()))
 	}
 
-	// Create a new Shopify client
-	client, err := shopify.NewClient(*app, creds.Url, creds.AccessToken)
+	// 商品发布必须复用统一超时配置，避免回落到依赖库默认的 10 秒客户端。
+	client, err := shopify.NewClient(*app, creds.Url, creds.AccessToken, shopify.WithHTTPClient(p.httpClient))
 	if err != nil {
 		return nil, usererrors.New(fmt.Sprintf("Failed to create Shopify client: %s", err.Error()))
 	}
