@@ -2,6 +2,7 @@ package shopify
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -81,6 +82,18 @@ func TestPullOrdersUsesExplicitShopifyAPIVersion(t *testing.T) {
 		if request.URL.Path != expectedPath {
 			t.Fatalf("Shopify 拉单 API 路径错误：得到 %s，期望 %s", request.URL.Path, expectedPath)
 		}
+		payload := struct {
+			Query string `json:"query"`
+		}{}
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(payload.Query, "lineItems(first: 250) {\n          nodes {\n            id") {
+			t.Fatalf("Shopify 拉单查询没有使用 LineItem.id：%s", payload.Query)
+		}
+		if strings.Contains(payload.Query, "customer {") {
+			t.Fatalf("Shopify 拉单查询不应额外要求 read_customers：%s", payload.Query)
+		}
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     make(http.Header),
@@ -99,5 +112,36 @@ func TestPullOrdersUsesExplicitShopifyAPIVersion(t *testing.T) {
 	}
 	if result.Total != 0 || len(result.Orders) != 0 {
 		t.Fatalf("空订单响应结果错误：%+v", result)
+	}
+}
+
+func TestShopifyLineItemLegacyID(t *testing.T) {
+	tests := []struct {
+		name     string
+		gid      string
+		expected string
+		wantErr  bool
+	}{
+		{name: "有效行项目", gid: "gid://shopify/LineItem/123456", expected: "123456"},
+		{name: "错误资源类型", gid: "gid://shopify/Product/123456", wantErr: true},
+		{name: "缺少数字ID", gid: "gid://shopify/LineItem/", wantErr: true},
+		{name: "非数字ID", gid: "gid://shopify/LineItem/invalid", wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			actual, err := shopifyLineItemLegacyID(test.gid)
+			if test.wantErr {
+				if err == nil {
+					t.Fatalf("期望解析失败，实际得到 %s", actual)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if actual != test.expected {
+				t.Fatalf("行项目 ID 错误：得到 %s，期望 %s", actual, test.expected)
+			}
+		})
 	}
 }

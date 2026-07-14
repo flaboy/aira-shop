@@ -33,12 +33,11 @@ const shopifyPaidOrdersQuery = `query PullPaidOrders($first: Int!, $after: Strin
         currentSubtotalPriceSet { shopMoney { amount currencyCode } }
         currentTotalTaxSet { shopMoney { amount currencyCode } }
         totalShippingPriceSet { shopMoney { amount currencyCode } }
-        customer { legacyResourceId email firstName lastName phone }
         shippingAddress { firstName lastName address1 address2 city province provinceCode country countryCodeV2 zip phone company }
         billingAddress { firstName lastName address1 address2 city province provinceCode country countryCodeV2 zip phone company }
         lineItems(first: 250) {
           nodes {
-            legacyResourceId
+            id
             name
             sku
             quantity
@@ -63,6 +62,7 @@ const shopifyPaidOrdersQuery = `query PullPaidOrders($first: Int!, $after: Strin
 const (
 	shopifyOrderPullAPIVersion = "2026-04"
 	shopifyPaidOrdersPageSize  = 1
+	shopifyLineItemGIDPrefix   = "gid://shopify/LineItem/"
 )
 
 type orderPullGraphQL interface {
@@ -97,14 +97,6 @@ type shopifyMoneySet struct {
 	ShopMoney shopifyMoney `json:"shopMoney"`
 }
 
-type shopifyOrderPerson struct {
-	LegacyResourceID string `json:"legacyResourceId"`
-	Email            string `json:"email"`
-	FirstName        string `json:"firstName"`
-	LastName         string `json:"lastName"`
-	Phone            string `json:"phone"`
-}
-
 type shopifyOrderAddress struct {
 	FirstName    string `json:"firstName"`
 	LastName     string `json:"lastName"`
@@ -121,7 +113,7 @@ type shopifyOrderAddress struct {
 }
 
 type shopifyOrderLineNode struct {
-	LegacyResourceID     string                   `json:"legacyResourceId"`
+	ID                   string                   `json:"id"`
 	Name                 string                   `json:"name"`
 	SKU                  string                   `json:"sku"`
 	Quantity             int                      `json:"quantity"`
@@ -161,7 +153,6 @@ type shopifyOrderNode struct {
 	CurrentSubtotalPriceSet  shopifyMoneySet      `json:"currentSubtotalPriceSet"`
 	CurrentTotalTaxSet       shopifyMoneySet      `json:"currentTotalTaxSet"`
 	TotalShippingPriceSet    shopifyMoneySet      `json:"totalShippingPriceSet"`
-	Customer                 *shopifyOrderPerson  `json:"customer"`
 	ShippingAddress          *shopifyOrderAddress `json:"shippingAddress"`
 	BillingAddress           *shopifyOrderAddress `json:"billingAddress"`
 	LineItems                struct {
@@ -270,12 +261,13 @@ func convertShopifyGraphQLOrder(node shopifyOrderNode, shopLinkID uint) (types.O
 		Currency: node.CurrentTotalPriceSet.ShopMoney.CurrencyCode,
 		RawData:  map[string]interface{}{"source_name": "shopify", "pull_source": "manual_pull"},
 	}
-	if node.Customer != nil {
-		orderData.Customer = &types.OrderCustomer{ID: node.Customer.LegacyResourceID, Email: node.Customer.Email, FirstName: node.Customer.FirstName, LastName: node.Customer.LastName, Phone: node.Customer.Phone}
-	}
 	orderData.ShippingAddress = shopifyGraphQLAddress(node.ShippingAddress)
 	orderData.BillingAddress = shopifyGraphQLAddress(node.BillingAddress)
 	for _, line := range node.LineItems.Nodes {
+		lineItemID, err := shopifyLineItemLegacyID(line.ID)
+		if err != nil {
+			return types.OrderData{}, err
+		}
 		if line.Product.LegacyResourceID == "" || line.Variant.LegacyResourceID == "" {
 			return types.OrderData{}, fmt.Errorf("Shopify order %s contains a removed product or variant", node.Name)
 		}
@@ -303,7 +295,7 @@ func convertShopifyGraphQLOrder(node shopifyOrderNode, shopLinkID uint) (types.O
 			properties[property.Key] = property.Value
 		}
 		orderData.LineItems = append(orderData.LineItems, types.OrderLineItem{
-			ID: line.LegacyResourceID, ProductID: line.Product.LegacyResourceID, VariantID: mapping.LocalVariantID,
+			ID: lineItemID, ProductID: line.Product.LegacyResourceID, VariantID: mapping.LocalVariantID,
 			Title: line.Name, SKU: line.SKU, Quantity: line.Quantity, Price: price, Properties: properties, VariantTitle: line.VariantTitle,
 		})
 	}
@@ -315,6 +307,17 @@ func convertShopifyGraphQLOrder(node shopifyOrderNode, shopLinkID uint) (types.O
 		orderData.ShippingLines = append(orderData.ShippingLines, types.OrderShippingLine{Code: shipping.Code, Title: shipping.Title, Price: price, Source: shipping.Source, Carrier: shipping.Source, CarrierID: shipping.Code})
 	}
 	return orderData, nil
+}
+
+func shopifyLineItemLegacyID(gid string) (string, error) {
+	if !strings.HasPrefix(gid, shopifyLineItemGIDPrefix) {
+		return "", fmt.Errorf("invalid Shopify line item GID %s", gid)
+	}
+	legacyID := strings.TrimPrefix(gid, shopifyLineItemGIDPrefix)
+	if _, err := strconv.ParseUint(legacyID, 10, 64); err != nil {
+		return "", fmt.Errorf("invalid Shopify line item GID %s", gid)
+	}
+	return legacyID, nil
 }
 
 func shopifyMoneyDecimal(money shopifyMoney) (*decimal.Decimal, error) {
