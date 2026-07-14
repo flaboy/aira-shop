@@ -2,11 +2,21 @@ package shopify
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
+	goshopify "github.com/bold-commerce/go-shopify/v4"
 	"github.com/flaboy/aira-shop/pkg/types"
 )
+
+type orderPullRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f orderPullRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
 
 type orderPullGraphQLStub struct {
 	pages []shopifyOrdersResponse
@@ -58,5 +68,36 @@ func TestFetchShopifyPaidOrderNodesUsesCursorPagination(t *testing.T) {
 	}
 	if stub.vars[0]["first"] != shopifyPaidOrdersPageSize {
 		t.Fatalf("订单分页大小错误：%+v", stub.vars[0])
+	}
+}
+
+func TestPullOrdersUsesExplicitShopifyAPIVersion(t *testing.T) {
+	previousApp := app
+	app = &goshopify.App{}
+	t.Cleanup(func() { app = previousApp })
+
+	client := &http.Client{Transport: orderPullRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		expectedPath := "/admin/api/2026-04/graphql.json"
+		if request.URL.Path != expectedPath {
+			t.Fatalf("Shopify 拉单 API 路径错误：得到 %s，期望 %s", request.URL.Path, expectedPath)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"data":{"orders":{"edges":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`)),
+			Request:    request,
+		}, nil
+	})}
+	platform := &Shopify{httpClient: client}
+
+	result, err := platform.PullOrders(context.Background(), &types.ShopCredential{Data: map[string]any{
+		"Url":         "example.myshopify.com",
+		"AccessToken": "token",
+	}}, types.OrderPullRequest{Since: time.Unix(100, 0).UTC(), Until: time.Unix(200, 0).UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 0 || len(result.Orders) != 0 {
+		t.Fatalf("空订单响应结果错误：%+v", result)
 	}
 }

@@ -60,7 +60,10 @@ const shopifyPaidOrdersQuery = `query PullPaidOrders($first: Int!, $after: Strin
   }
 }`
 
-const shopifyPaidOrdersPageSize = 1
+const (
+	shopifyOrderPullAPIVersion = "2026-04"
+	shopifyPaidOrdersPageSize  = 1
+)
 
 type orderPullGraphQL interface {
 	Query(context.Context, string, interface{}, interface{}) error
@@ -207,7 +210,7 @@ func (p *Shopify) PullOrders(ctx context.Context, credential *types.ShopCredenti
 	if err := json.Unmarshal(credentialJSON, &creds); err != nil {
 		return nil, err
 	}
-	client, err := goshopify.NewClient(*app, creds.Url, creds.AccessToken, goshopify.WithHTTPClient(p.httpClient))
+	client, err := goshopify.NewClient(*app, creds.Url, creds.AccessToken, goshopify.WithVersion(shopifyOrderPullAPIVersion), goshopify.WithHTTPClient(p.httpClient))
 	if err != nil {
 		return nil, err
 	}
