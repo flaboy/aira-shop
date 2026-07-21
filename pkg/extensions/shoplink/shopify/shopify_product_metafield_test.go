@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	goshopify "github.com/bold-commerce/go-shopify/v4"
 	"github.com/flaboy/aira-shop/pkg/types"
 )
 
@@ -21,7 +20,7 @@ func TestPutProductUsesConfiguredHTTPClient(t *testing.T) {
 	}
 }
 
-func TestToShopifyProductAddsSizeGuideMetafield(t *testing.T) {
+func TestToShopifyProductAddsSizeGuideToDescription(t *testing.T) {
 	product, err := (&Shopify{}).toShopifyProduct(&types.ProductData{
 		ProductName:      "Size Guide Product",
 		BodyHTML:         "<p>Description</p>",
@@ -32,22 +31,25 @@ func TestToShopifyProductAddsSizeGuideMetafield(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(product.Metafields) != 1 {
-		t.Fatalf("期望生成 1 个商品 metafield，实际为 %d 个", len(product.Metafields))
+	if product.BodyHTML != "<p>Description</p><table><tr><td>M</td></tr></table>" {
+		t.Fatalf("Size Guide 必须追加到商品 Description，实际为 %s", product.BodyHTML)
 	}
+	if len(product.Metafields) != 0 {
+		t.Fatalf("Size Guide 不得再生成独立 metafield，实际为 %d 个", len(product.Metafields))
+	}
+}
 
-	metafield := product.Metafields[0]
-	if metafield.Namespace != sizeGuideMetafieldNamespace {
-		t.Fatalf("期望 namespace 为 %s，实际为 %s", sizeGuideMetafieldNamespace, metafield.Namespace)
+func TestToShopifyProductDoesNotAddDisabledSizeGuide(t *testing.T) {
+	product, err := (&Shopify{}).toShopifyProduct(&types.ProductData{
+		BodyHTML:         "<p>Description</p>",
+		SizeGuideEnabled: false,
+		SizeGuideHTML:    "<table><tr><td>M</td></tr></table>",
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if metafield.Key != sizeGuideMetafieldKey {
-		t.Fatalf("期望 key 为 %s，实际为 %s", sizeGuideMetafieldKey, metafield.Key)
-	}
-	if metafield.Type != goshopify.MetafieldTypeMultiLineTextField {
-		t.Fatalf("期望 metafield 类型为 multi_line_text_field，实际为 %s", metafield.Type)
-	}
-	if metafield.Value != "<table><tr><td>M</td></tr></table>" {
-		t.Fatalf("期望写入 size guide html，实际为 %v", metafield.Value)
+	if product.BodyHTML != "<p>Description</p>" {
+		t.Fatalf("未启用 Size Guide 时不得修改 Description，实际为 %s", product.BodyHTML)
 	}
 }
 

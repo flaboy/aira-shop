@@ -40,11 +40,6 @@ var app *shopify.App
 
 var dec100 = decimal.NewFromInt(100)
 
-const (
-	sizeGuideMetafieldNamespace = "effiprint"
-	sizeGuideMetafieldKey       = "size_guide"
-)
-
 func (p *Shopify) Init() error {
 	if !config.Config.Shopify.Enabled {
 		return nil
@@ -672,9 +667,15 @@ func (p *Shopify) toShopifyProduct(product *types.ProductData) (shopify.Product,
 		})
 	}
 
+	bodyHTML := product.BodyHTML
+	if product.SizeGuideEnabled {
+		// Size table 与商品正文使用同一展示路径，避免依赖店铺主题配置独立 Tab。
+		bodyHTML += product.SizeGuideHTML
+	}
+
 	shopifyProduct := shopify.Product{
 		Title:          product.ProductName,
-		BodyHTML:       product.BodyHTML,
+		BodyHTML:       bodyHTML,
 		Status:         shopify.ProductStatusActive,
 		PublishedAt:    &publishedAt,
 		PublishedScope: "web",
@@ -700,16 +701,6 @@ func (p *Shopify) toShopifyProduct(product *types.ProductData) (shopify.Product,
 			Key:       identity.key,
 			Type:      shopify.MetafieldTypeSingleLineTextField,
 			Value:     identity.value,
-		})
-	}
-
-	if product.SizeGuideEnabled {
-		// 将商品 Size Guide 写入 Shopify 产品 metafield，店铺主题可据此渲染独立 tab。
-		shopifyProduct.Metafields = append(shopifyProduct.Metafields, shopify.Metafield{
-			Namespace: sizeGuideMetafieldNamespace,
-			Key:       sizeGuideMetafieldKey,
-			Type:      shopify.MetafieldTypeMultiLineTextField,
-			Value:     product.SizeGuideHTML,
 		})
 	}
 
