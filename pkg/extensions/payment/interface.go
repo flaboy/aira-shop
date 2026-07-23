@@ -1,6 +1,7 @@
 package payment
 
 import (
+	"github.com/flaboy/aira-shop/pkg/config"
 	"github.com/flaboy/aira-shop/pkg/extensions/payment/paypal"
 	"github.com/flaboy/aira-shop/pkg/extensions/payment/types"
 	"github.com/flaboy/pin"
@@ -29,7 +30,9 @@ var paymentChannels map[string]PaymentChannel
 
 func Init() {
 	paymentChannels = make(map[string]PaymentChannel)
-	paymentChannels["paypal"] = &paypal.PayPal{}
+	if config.Config.PayPal.Enabled {
+		paymentChannels["paypal"] = &paypal.PayPal{}
+	}
 
 	for _, channel := range paymentChannels {
 		if err := channel.Init(); err != nil {

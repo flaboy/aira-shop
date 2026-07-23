@@ -17,6 +17,7 @@ type CommenceConfig struct {
 
 	// 支付服务配置
 	PayPal struct {
+		Enabled      bool   `cfg:"ENABLED" default:"true"`
 		ClientID     string `cfg:"CLIENT_ID"`
 		ClientSecret string `cfg:"CLIENT_SECRET"`
 		Sandbox      bool   `cfg:"SANDBOX" default:"false"`
