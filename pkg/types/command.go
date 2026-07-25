@@ -86,19 +86,37 @@ func (c *ShopCredential) IsValid() bool {
 }
 
 type ProductData struct {
-	ProductName        string           `json:"product_name"`
-	PublishOperationID string           `json:"publish_operation_id"`
-	OriginProductID    string           `json:"origin_product_id"`
-	ExternalShopID     string           `json:"external_shop_id"`
-	BodyHTML           string           `json:"body_html"`
-	Tags               string           `json:"tags"`
-	SizeGuideEnabled   bool             `json:"size_guide_enabled"`
-	SizeGuideHTML      string           `json:"size_guide_html"`
-	Image              ProductImage     `json:"image"`
-	Images             []ProductImage   `json:"images"`
-	Options            []ProductOption  `json:"options"`
-	Variants           []ProductVariant `json:"variants"`
-	BusinessContext    interface{}      `json:"business_context"`
+	ProductName        string               `json:"product_name"`
+	PublishOperationID string               `json:"publish_operation_id"`
+	OriginProductID    string               `json:"origin_product_id"`
+	ExternalShopID     string               `json:"external_shop_id"`
+	BodyHTML           string               `json:"body_html"`
+	Tags               string               `json:"tags"`
+	SizeGuideEnabled   bool                 `json:"size_guide_enabled"`
+	SizeGuideHTML      string               `json:"size_guide_html"`
+	Image              ProductImage         `json:"image"`
+	Images             []ProductImage       `json:"images"`
+	Options            []ProductOption      `json:"options"`
+	Variants           []ProductVariant     `json:"variants"`
+	BrandServices      ProductBrandServices `json:"brand_services"`
+	SyncMode           string               `json:"sync_mode,omitempty"`
+	UpdateFields       []string             `json:"update_fields,omitempty"`
+	BusinessContext    interface{}          `json:"business_context"`
+}
+
+const (
+	ProductSyncModeKeep              = "keep"
+	ProductSyncModeSelected          = "selected"
+	ProductUpdateFieldTitle          = "product_title"
+	ProductUpdateFieldDescription    = "description"
+	ProductUpdateFieldImages         = "images"
+	ProductUpdateFieldVariantsPrices = "variants_prices"
+	ProductUpdateFieldBrandServices  = "branding_services"
+)
+
+type ProductBrandServices struct {
+	Branding    string `json:"branding,omitempty"`
+	GiftMessage string `json:"gift_message,omitempty"`
 }
 
 type ProductImage struct {

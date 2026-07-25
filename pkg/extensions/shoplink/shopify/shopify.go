@@ -489,23 +489,93 @@ func (p *Shopify) UpdateProduct(credential *types.ShopCredential, outerID string
 		return nil, usererrors.New(fmt.Sprintf("Failed to create Shopify client: %s", err.Error()))
 	}
 
-	shopifyProduct, err := p.toShopifyProduct(product)
-	if err != nil {
-		return nil, usererrors.New(fmt.Sprintf("Failed to convert product: %s", err.Error()))
-	}
-
 	productID := cast.ToUint64(outerID)
 	if productID == 0 {
 		return nil, usererrors.New("Invalid Shopify product id")
 	}
-	shopifyProduct.Id = productID
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	productResp, err := client.Product.Update(ctx, shopifyProduct)
+	db := database.Database()
+	var productResp *shopify.Product
+	var shopProduct models.ShopProduct
+	var variantMappings []models.ShopifyVariantMapping
+	if product.SyncMode != "" {
+		if product.SyncMode != types.ProductSyncModeKeep && product.SyncMode != types.ProductSyncModeSelected {
+			return nil, fmt.Errorf("invalid Shopify product sync mode: %s", product.SyncMode)
+		}
+		productResp, err = client.Product.Get(ctx, productID, nil)
+		if err != nil {
+			return nil, normalizeProductUpdateError(err)
+		}
+		identityMetafields, err := client.Product.ListMetafields(ctx, productID, nil)
+		if err != nil {
+			return nil, fmt.Errorf("read EffiPrint Shopify product identity: %w", err)
+		}
+		if err := validateShopifyProductIdentity(identityMetafields, product); err != nil {
+			return nil, err
+		}
+		if err := db.Where(
+			"shop_id = ? AND platform = ? AND outer_id = ? AND publish_operation_id = ?",
+			creds.ShopLinkID,
+			"shopify",
+			outerID,
+			product.PublishOperationID,
+		).First(&shopProduct).Error; err != nil {
+			return nil, fmt.Errorf("query EffiPrint Shopify product mapping: %w", err)
+		}
+		if err := db.Where("shop_product_id = ?", shopProduct.ID).
+			Order("local_variant_id ASC").
+			Find(&variantMappings).Error; err != nil {
+			return nil, fmt.Errorf("query EffiPrint Shopify variant mappings: %w", err)
+		}
+		if err := validateShopifyVariantMappings(productResp.Variants, product.Variants, variantMappings); err != nil {
+			return nil, err
+		}
+		if product.SyncMode == types.ProductSyncModeKeep {
+			return persistVerifiedShopifyProduct(db, &shopProduct, productResp, creds.Url, product)
+		}
+	}
+
+	shopifyProduct, err := p.toShopifyProduct(product)
 	if err != nil {
-		return nil, normalizeProductUpdateError(err)
+		return nil, usererrors.New(fmt.Sprintf("Failed to convert product: %s", err.Error()))
+	}
+	shopifyProduct.Id = productID
+
+	updateFields := productUpdateFieldSet(product.UpdateFields)
+	if len(updateFields) > 0 {
+		shopifyProduct = selectShopifyProductUpdate(shopifyProduct, updateFields)
+		shopifyProduct.Id = productID
+	}
+	if _, selected := updateFields[types.ProductUpdateFieldVariantsPrices]; selected {
+		shopifyProduct.Variants, err = applyShopifyVariantMappings(
+			shopifyProduct.Variants,
+			product.Variants,
+			variantMappings,
+			productID,
+		)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if hasShopifyProductFields(updateFields) {
+		productResp, err = client.Product.Update(ctx, shopifyProduct)
+		if err != nil {
+			return nil, normalizeProductUpdateError(err)
+		}
+	} else if productResp == nil {
+		productResp, err = client.Product.Get(ctx, productID, nil)
+		if err != nil {
+			return nil, normalizeProductUpdateError(err)
+		}
+	}
+	if _, selected := updateFields[types.ProductUpdateFieldBrandServices]; selected {
+		if err := syncProductBrandServices(ctx, client, productID, product.BrandServices); err != nil {
+			return nil, err
+		}
 	}
 
 	productData, err := json.Marshal(product)
@@ -513,17 +583,26 @@ func (p *Shopify) UpdateProduct(credential *types.ShopCredential, outerID string
 		return nil, usererrors.New(fmt.Sprintf("Failed to marshal product data: %s", err.Error()))
 	}
 
-	db := database.Database()
-	if err := db.Model(&models.ShopProduct{}).
-		Where("platform = ? AND outer_id = ?", "shopify", outerID).
+	updateResult := db.Model(&models.ShopProduct{}).
+		Where(
+			"shop_id = ? AND platform = ? AND outer_id = ? AND publish_operation_id = ?",
+			creds.ShopLinkID,
+			"shopify",
+			outerID,
+			product.PublishOperationID,
+		).
 		Updates(map[string]interface{}{
 			"name":       productResp.Title,
 			"status":     "active",
 			"url":        fmt.Sprintf("https://%s/admin/products/%d", creds.Url, productResp.Id),
 			"data":       productData,
 			"updated_at": time.Now(),
-		}).Error; err != nil {
-		return nil, usererrors.New(fmt.Sprintf("Failed to update shop product: %s", err.Error()))
+		})
+	if updateResult.Error != nil {
+		return nil, usererrors.New(fmt.Sprintf("Failed to update shop product: %s", updateResult.Error.Error()))
+	}
+	if updateResult.RowsAffected != 1 {
+		return nil, usererrors.New("EffiPrint Shopify product mapping changed concurrently")
 	}
 
 	return &types.PutProductResult{
@@ -534,6 +613,172 @@ func (p *Shopify) UpdateProduct(credential *types.ShopCredential, outerID string
 		OuterID: fmt.Sprintf("%d", productResp.Id),
 		Url:     fmt.Sprintf("https://%s/admin/products/%d", creds.Url, productResp.Id),
 	}, nil
+}
+
+func validateShopifyProductIdentity(metafields []shopify.Metafield, product *types.ProductData) error {
+	actual := map[string]string{}
+	for _, metafield := range metafields {
+		if metafield.Namespace == "effiprint" {
+			actual[metafield.Key] = fmt.Sprint(metafield.Value)
+		}
+	}
+	expected := map[string]string{
+		"origin_product_id":    product.OriginProductID,
+		"publish_operation_id": product.PublishOperationID,
+		"external_shop_id":     product.ExternalShopID,
+	}
+	for _, key := range []string{"origin_product_id", "publish_operation_id", "external_shop_id"} {
+		if expected[key] == "" || actual[key] != expected[key] {
+			return fmt.Errorf("Shopify product is not owned by this EffiPrint publication: %s mismatch", key)
+		}
+	}
+	return nil
+}
+
+func validateShopifyVariantMappings(remote []shopify.Variant, local []types.ProductVariant, mappings []models.ShopifyVariantMapping) error {
+	localIDs := make(map[uint]struct{}, len(local))
+	for _, variant := range local {
+		localIDs[variant.ID] = struct{}{}
+	}
+	remoteIDs := make(map[uint64]struct{}, len(remote))
+	for _, variant := range remote {
+		remoteIDs[variant.Id] = struct{}{}
+	}
+	if len(mappings) != len(localIDs) {
+		return fmt.Errorf("EffiPrint Shopify variant mapping is incomplete")
+	}
+	for _, mapping := range mappings {
+		if _, exists := localIDs[mapping.LocalVariantID]; !exists {
+			return fmt.Errorf("EffiPrint local variant mapping is invalid: %d", mapping.LocalVariantID)
+		}
+		if _, exists := remoteIDs[mapping.ShopifyVariantID]; !exists {
+			return fmt.Errorf("EffiPrint Shopify variant no longer exists: %d", mapping.ShopifyVariantID)
+		}
+	}
+	return nil
+}
+
+func persistVerifiedShopifyProduct(db *gorm.DB, shopProduct *models.ShopProduct, remote *shopify.Product, shopURL string, product *types.ProductData) (*types.PutProductResult, error) {
+	productData, err := json.Marshal(product)
+	if err != nil {
+		return nil, fmt.Errorf("marshal verified EffiPrint product data: %w", err)
+	}
+	url := fmt.Sprintf("https://%s/admin/products/%d", shopURL, remote.Id)
+	result := db.Model(&models.ShopProduct{}).
+		Where("id = ? AND publish_operation_id = ?", shopProduct.ID, product.PublishOperationID).
+		Updates(map[string]interface{}{
+			"name":       remote.Title,
+			"status":     "active",
+			"url":        url,
+			"data":       productData,
+			"updated_at": time.Now(),
+		})
+	if result.Error != nil {
+		return nil, fmt.Errorf("persist verified EffiPrint Shopify product: %w", result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return nil, fmt.Errorf("verified EffiPrint Shopify product mapping changed concurrently")
+	}
+	return &types.PutProductResult{
+		CommandResult: types.CommandResult{
+			Success: true,
+			Message: "EffiPrint product identity verified successfully",
+		},
+		OuterID:       fmt.Sprintf("%d", remote.Id),
+		ShopProductID: shopProduct.ID,
+		Url:           url,
+	}, nil
+}
+
+func productUpdateFieldSet(fields []string) map[string]struct{} {
+	result := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
+		result[field] = struct{}{}
+	}
+	return result
+}
+
+func selectShopifyProductUpdate(product shopify.Product, fields map[string]struct{}) shopify.Product {
+	selected := shopify.Product{Id: product.Id}
+	if _, exists := fields[types.ProductUpdateFieldTitle]; exists {
+		selected.Title = product.Title
+	}
+	if _, exists := fields[types.ProductUpdateFieldDescription]; exists {
+		selected.BodyHTML = product.BodyHTML
+	}
+	if _, exists := fields[types.ProductUpdateFieldImages]; exists {
+		selected.Images = product.Images
+	}
+	if _, exists := fields[types.ProductUpdateFieldVariantsPrices]; exists {
+		selected.Options = product.Options
+		selected.Variants = product.Variants
+	}
+	return selected
+}
+
+func hasShopifyProductFields(fields map[string]struct{}) bool {
+	for _, field := range []string{
+		types.ProductUpdateFieldTitle,
+		types.ProductUpdateFieldDescription,
+		types.ProductUpdateFieldImages,
+		types.ProductUpdateFieldVariantsPrices,
+	} {
+		if _, exists := fields[field]; exists {
+			return true
+		}
+	}
+	return len(fields) == 0
+}
+
+func applyShopifyVariantMappings(source []shopify.Variant, local []types.ProductVariant, mappings []models.ShopifyVariantMapping, productID uint64) ([]shopify.Variant, error) {
+	if len(source) != len(local) {
+		return nil, fmt.Errorf("local Shopify variant payload is incomplete")
+	}
+	remoteByLocalID := make(map[uint]uint64, len(mappings))
+	for _, mapping := range mappings {
+		remoteByLocalID[mapping.LocalVariantID] = mapping.ShopifyVariantID
+	}
+	for index := range source {
+		remoteID, exists := remoteByLocalID[local[index].ID]
+		if !exists || remoteID == 0 {
+			return nil, fmt.Errorf("Shopify variant mapping is missing for local variant %d", local[index].ID)
+		}
+		source[index].Id = remoteID
+		source[index].ProductId = productID
+		source[index].Metafields = nil
+	}
+	return source, nil
+}
+
+func syncProductBrandServices(ctx context.Context, client *shopify.Client, productID uint64, brandServices types.ProductBrandServices) error {
+	value, err := json.Marshal(brandServices)
+	if err != nil {
+		return fmt.Errorf("marshal product brand services: %w", err)
+	}
+	metafields, err := client.Product.ListMetafields(ctx, productID, nil)
+	if err != nil {
+		return fmt.Errorf("list product brand services metafield: %w", err)
+	}
+	metafield := shopify.Metafield{
+		Namespace: "effiprint",
+		Key:       "branding_services",
+		Type:      shopify.MetafieldTypeJSON,
+		Value:     string(value),
+	}
+	for _, current := range metafields {
+		if current.Namespace != metafield.Namespace || current.Key != metafield.Key {
+			continue
+		}
+		metafield.Id = current.Id
+		if _, err := client.Product.UpdateMetafield(ctx, productID, metafield); err != nil {
+			return fmt.Errorf("update product brand services metafield: %w", err)
+		}
+		return nil
+	}
+	if _, err := client.Product.CreateMetafield(ctx, productID, metafield); err != nil {
+		return fmt.Errorf("create product brand services metafield: %w", err)
+	}
+	return nil
 }
 
 // normalizeProductUpdateError 将 Shopify 404 转为稳定业务文案，供异步发布状态安全返回给商城端。
