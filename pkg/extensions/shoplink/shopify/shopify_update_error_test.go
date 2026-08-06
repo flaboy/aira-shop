@@ -3,8 +3,6 @@ package shopify
 import (
 	"errors"
 	"testing"
-
-	goshopify "github.com/bold-commerce/go-shopify/v4"
 )
 
 func TestNormalizeProductUpdateError(t *testing.T) {
@@ -15,7 +13,7 @@ func TestNormalizeProductUpdateError(t *testing.T) {
 	}{
 		{
 			name:    "远端商品不存在",
-			err:     goshopify.ResponseError{Status: 404, Message: "Not Found"},
+			err:     errShopifyProductNotFound,
 			message: "This Shopify product no longer exists. Publish it as a new product instead.",
 		},
 		{

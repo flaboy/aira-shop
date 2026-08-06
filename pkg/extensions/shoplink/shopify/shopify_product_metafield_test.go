@@ -14,9 +14,9 @@ func TestPutProductUsesConfiguredHTTPClient(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	clientCall := "shopify.NewClient(*app, creds.Url, creds.AccessToken, shopify.WithHTTPClient(p.httpClient))"
+	clientCall := "newShopifyGraphQLClient(creds.Url, creds.AccessToken, p.httpClient)"
 	if !strings.Contains(string(content), clientCall) {
-		t.Fatal("商品发布必须使用 Shopify 适配器统一配置的 HTTP Client")
+		t.Fatal("商品发布必须使用 Shopify GraphQL 适配器统一配置的 HTTP Client")
 	}
 }
 

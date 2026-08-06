@@ -11,7 +11,6 @@ var (
 	ErrAccessTokenFailed        = usererrors.New("shop.access_token_failed", "Failed to get access token")
 	ErrShopifyClientCreation    = usererrors.New("shop.shopify_client_creation_failed", "Failed to create Shopify client")
 	ErrShopInfoFailed           = usererrors.New("shop.shop_info_failed", "Failed to get shop info")
-	ErrWebhookSubscription      = usererrors.New("shop.webhook_subscription_failed", "Failed to subscribe webhooks")
 	ErrCredentialsMarshal       = usererrors.New("shop.credentials_marshal_failed", "Failed to marshal credentials")
 	ErrShopCreation             = usererrors.New("shop.creation_failed", "Failed to create shop")
 	ErrPlatformNotSupported     = usererrors.New("shop.platform_not_supported", "Unsupported platform")

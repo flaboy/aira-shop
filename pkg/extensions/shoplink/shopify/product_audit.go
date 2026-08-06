@@ -3,33 +3,26 @@ package shopify
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"net/http"
 	"strconv"
 	"time"
 
-	goshopify "github.com/bold-commerce/go-shopify/v4"
 	"github.com/flaboy/aira-core/pkg/database"
 	"github.com/flaboy/aira-shop/pkg/models"
 	"github.com/flaboy/aira-shop/pkg/types"
 	"gorm.io/gorm"
 )
 
-func findProductsByPublishOperation(ctx context.Context, client *goshopify.Client, operationID string) ([]goshopify.Product, error) {
-	products, err := client.Product.ListAll(ctx, nil)
+func findProductsByPublishOperation(ctx context.Context, client *shopifyGraphQLClient, operationID string) ([]uint64, error) {
+	products, metafieldsByProduct, err := client.listProducts(ctx)
 	if err != nil {
 		return nil, err
 	}
-	matches := make([]goshopify.Product, 0)
+	matches := make([]uint64, 0)
 	for _, product := range products {
-		metafields, err := client.Product.ListMetafields(ctx, product.Id, nil)
-		if err != nil {
-			return nil, err
-		}
-		for _, metafield := range metafields {
+		for _, metafield := range metafieldsByProduct[product.Id] {
 			if metafield.Namespace == "effiprint" && metafield.Key == "publish_operation_id" && fmt.Sprint(metafield.Value) == operationID {
-				matches = append(matches, product)
+				matches = append(matches, product.Id)
 				break
 			}
 		}
@@ -37,17 +30,12 @@ func findProductsByPublishOperation(ctx context.Context, client *goshopify.Clien
 	return matches, nil
 }
 
-func deleteAndVerifyShopifyProduct(ctx context.Context, client *goshopify.Client, productID uint64) error {
-	if err := client.Product.Delete(ctx, productID); err != nil {
-		var responseErr goshopify.ResponseError
-		if errors.As(err, &responseErr) && responseErr.Status == http.StatusNotFound {
-			return nil
-		}
+func deleteAndVerifyShopifyProduct(ctx context.Context, client *shopifyGraphQLClient, productID uint64) error {
+	if _, err := client.deleteProduct(ctx, productID); err != nil {
 		return err
 	}
-	if _, err := client.Product.Get(ctx, productID, nil); err != nil {
-		var responseErr goshopify.ResponseError
-		if errors.As(err, &responseErr) && responseErr.Status == http.StatusNotFound {
+	if _, _, _, err := client.getProduct(ctx, productID); err != nil {
+		if err == errShopifyProductNotFound {
 			return nil
 		}
 		return fmt.Errorf("verify Shopify product %d deletion: %w", productID, err)
@@ -55,7 +43,7 @@ func deleteAndVerifyShopifyProduct(ctx context.Context, client *goshopify.Client
 	return fmt.Errorf("Shopify product %d still exists after deletion", productID)
 }
 
-func cleanupCreatedShopifyProduct(client *goshopify.Client, productID uint64) error {
+func cleanupCreatedShopifyProduct(client *shopifyGraphQLClient, productID uint64) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	return deleteAndVerifyShopifyProduct(ctx, client, productID)
@@ -70,13 +58,13 @@ func (p *Shopify) AuditProducts(credential *types.ShopCredential, externalShopID
 	if err := json.Unmarshal(credData, &creds); err != nil {
 		return nil, fmt.Errorf("unmarshal Shopify credentials: %w", err)
 	}
-	client, err := goshopify.NewClient(*app, creds.Url, creds.AccessToken, goshopify.WithHTTPClient(p.httpClient))
+	client, err := newShopifyGraphQLClient(creds.Url, creds.AccessToken, p.httpClient)
 	if err != nil {
 		return nil, fmt.Errorf("create Shopify audit client: %w", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
-	remoteProducts, err := client.Product.ListAll(ctx, nil)
+	remoteProducts, remoteMetafields, err := client.listProducts(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list Shopify products for audit: %w", err)
 	}
@@ -86,12 +74,8 @@ func (p *Shopify) AuditProducts(credential *types.ShopCredential, externalShopID
 	for _, remote := range remoteProducts {
 		outerID := strconv.FormatUint(remote.Id, 10)
 		remoteIDs[outerID] = true
-		metafields, err := client.Product.ListMetafields(ctx, remote.Id, nil)
-		if err != nil {
-			return nil, fmt.Errorf("list Shopify product %s metafields: %w", outerID, err)
-		}
 		identity := map[string]string{}
-		for _, metafield := range metafields {
+		for _, metafield := range remoteMetafields[remote.Id] {
 			if metafield.Namespace == "effiprint" {
 				identity[metafield.Key] = fmt.Sprint(metafield.Value)
 			}
@@ -167,7 +151,7 @@ func (p *Shopify) CleanupPublishOperation(credential *types.ShopCredential, oper
 	if err := json.Unmarshal(credData, &creds); err != nil {
 		return fmt.Errorf("unmarshal Shopify credentials: %w", err)
 	}
-	client, err := goshopify.NewClient(*app, creds.Url, creds.AccessToken, goshopify.WithHTTPClient(p.httpClient))
+	client, err := newShopifyGraphQLClient(creds.Url, creds.AccessToken, p.httpClient)
 	if err != nil {
 		return fmt.Errorf("create Shopify cleanup client: %w", err)
 	}
@@ -178,7 +162,7 @@ func (p *Shopify) CleanupPublishOperation(credential *types.ShopCredential, oper
 		return fmt.Errorf("find Shopify publish operation %s: %w", operationID, err)
 	}
 	for _, product := range matches {
-		if err := deleteAndVerifyShopifyProduct(ctx, client, product.Id); err != nil {
+		if err := deleteAndVerifyShopifyProduct(ctx, client, product); err != nil {
 			return fmt.Errorf("clean Shopify publish operation %s: %w", operationID, err)
 		}
 	}

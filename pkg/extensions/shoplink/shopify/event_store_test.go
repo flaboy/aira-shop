@@ -25,18 +25,18 @@ func newShopifyEventTestDB(t *testing.T) *gorm.DB {
 func TestShopifyEventDuplicateDeliveryUsesSingleActiveLease(t *testing.T) {
 	db := newShopifyEventTestDB(t)
 	now := time.Unix(1000, 0).UTC()
-	first, terminal, busy, err := beginShopifyEventWithDB(db, "event-1", "message-1", "orders/create", "shop-1", json.RawMessage(`{"id":1}`), now)
+	first, terminal, busy, err := beginShopifyEventWithDB(db, "event-1", "message-1", "orders/create", "shop-1", "one.myshopify.com", "https", json.RawMessage(`{"id":1}`), now)
 	if err != nil || terminal || busy {
 		t.Fatalf("首次接收失败：terminal=%v busy=%v err=%v", terminal, busy, err)
 	}
-	_, terminal, busy, err = beginShopifyEventWithDB(db, "event-1", "message-2", "orders/create", "shop-1", json.RawMessage(`{"id":1}`), now.Add(time.Minute))
+	_, terminal, busy, err = beginShopifyEventWithDB(db, "event-1", "message-2", "orders/create", "shop-1", "one.myshopify.com", "https", json.RawMessage(`{"id":1}`), now.Add(time.Minute))
 	if err != nil || terminal || !busy {
 		t.Fatalf("租约内重复投递必须 busy：terminal=%v busy=%v err=%v", terminal, busy, err)
 	}
 	if err := finishShopifyEventWithDB(db, "event-1", first.ProcessingToken, "success", nil, now.Add(2*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	_, terminal, busy, err = beginShopifyEventWithDB(db, "event-1", "message-3", "orders/create", "shop-1", json.RawMessage(`{"id":1}`), now.Add(3*time.Minute))
+	_, terminal, busy, err = beginShopifyEventWithDB(db, "event-1", "message-3", "orders/create", "shop-1", "one.myshopify.com", "https", json.RawMessage(`{"id":1}`), now.Add(3*time.Minute))
 	if err != nil || !terminal || busy {
 		t.Fatalf("成功事件重复投递必须为终态：terminal=%v busy=%v err=%v", terminal, busy, err)
 	}
@@ -45,11 +45,11 @@ func TestShopifyEventDuplicateDeliveryUsesSingleActiveLease(t *testing.T) {
 func TestShopifyEventExpiredLeaseRejectsOldOwnerFinish(t *testing.T) {
 	db := newShopifyEventTestDB(t)
 	now := time.Unix(2000, 0).UTC()
-	first, _, _, err := beginShopifyEventWithDB(db, "event-2", "message-1", "orders/create", "shop-2", json.RawMessage(`{"id":2}`), now)
+	first, _, _, err := beginShopifyEventWithDB(db, "event-2", "message-1", "orders/create", "shop-2", "two.myshopify.com", "https", json.RawMessage(`{"id":2}`), now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, terminal, busy, err := beginShopifyEventWithDB(db, "event-2", "message-2", "orders/create", "shop-2", json.RawMessage(`{"id":2}`), now.Add(16*time.Minute))
+	second, terminal, busy, err := beginShopifyEventWithDB(db, "event-2", "message-2", "orders/create", "shop-2", "two.myshopify.com", "https", json.RawMessage(`{"id":2}`), now.Add(16*time.Minute))
 	if err != nil || terminal || busy {
 		t.Fatalf("过期租约应被新 owner 接管：terminal=%v busy=%v err=%v", terminal, busy, err)
 	}

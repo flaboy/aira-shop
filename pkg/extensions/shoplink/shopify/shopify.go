@@ -78,66 +78,14 @@ type Shopify struct {
 	httpClient *http.Client
 }
 
-// subscribeWebhooks 为店铺订阅所需的webhook
-func (p *Shopify) subscribeWebhooks(client *shopify.Client) error {
-	ctx := context.Background()
-	topics := []string{
-		"orders/create",
-		"orders/updated",
-		"orders/paid",
-		"orders/cancelled",
-		"orders/fulfilled",
-	}
-
-	// 先获取现有的webhooks
-	existingWebhooks, err := client.Webhook.List(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("failed to list existing webhooks: %v", err)
-	}
-
-	// 创建已存在的webhook映射，便于快速查找
-	existingWebhookMap := make(map[string]bool)
-	for _, webhook := range existingWebhooks {
-		if webhook.Address == config.Config.Shopify.EventBridgeARN {
-			existingWebhookMap[webhook.Topic] = true
-		}
-	}
-
-	for _, topic := range topics {
-		// 检查webhook是否已存在
-		if existingWebhookMap[topic] {
-			fmt.Printf("Webhook for topic %s already exists, skipping...\n", topic)
-			continue
-		}
-
-		webhook := shopify.Webhook{
-			Topic:   topic,
-			Address: config.Config.Shopify.EventBridgeARN,
-			Format:  "json",
-		}
-
-		result, err := client.Webhook.Create(ctx, webhook)
-		if err != nil {
-			// 即使检查了现有webhook，仍可能因为并发或其他原因失败
-			// 如果是地址已存在的错误，记录警告但不中断流程
-			if strings.Contains(strings.ToLower(err.Error()), "address") &&
-				strings.Contains(strings.ToLower(err.Error()), "taken") {
-				fmt.Printf("Warning: Webhook for topic %s already exists: %v\n", topic, err)
-				continue
-			}
-			return fmt.Errorf("failed to create webhook for %s: %v", topic, err)
-		}
-
-		jsonData, _ := json.MarshalIndent(result, "", "  ")
-		fmt.Printf("Webhook created for topic %s: \n%s\n", topic, string(jsonData))
-	}
-	return nil
-}
-
 type ShopifyCredential struct {
-	Url         string
-	AccessToken string
-	ShopLinkID  uint
+	Url                   string `json:"Url"`
+	AccessToken           string `json:"AccessToken"`
+	RefreshToken          string `json:"RefreshToken,omitempty"`
+	Scope                 string `json:"Scope,omitempty"`
+	AccessTokenExpiresAt  int64  `json:"AccessTokenExpiresAt,omitempty"`
+	RefreshTokenExpiresAt int64  `json:"RefreshTokenExpiresAt,omitempty"`
+	ShopLinkID            uint   `json:"ShopLinkID,omitempty"`
 }
 
 func (p *Shopify) HandleCallback(c *pin.Context, businessContext json.RawMessage, callbackUrl *url.URL) (*types.CallbackResponse, error) {
@@ -168,12 +116,6 @@ func (p *Shopify) HandleCallback(c *pin.Context, businessContext json.RawMessage
 		return nil, errors.ErrShopInfoFailed
 	}
 
-	// 订阅webhook
-	if err := p.subscribeWebhooks(client); err != nil {
-		fmt.Printf("Shopify webhook subscription failed for shop %s: %v\n", shopUrl, err)
-		return nil, errors.ErrWebhookSubscription
-	}
-
 	shopName := shopInfo.Name
 	externalShopID := strconv.FormatUint(shopInfo.Id, 10)
 
@@ -186,14 +128,27 @@ func (p *Shopify) HandleCallback(c *pin.Context, businessContext json.RawMessage
 	if err != nil {
 		return nil, errors.ErrCredentialsMarshal
 	}
+	credentialCipher, err := NewCredentialCipher(config.Config.Shopify.CredentialEncryptionKey, config.Config.Shopify.CredentialKeyVersion)
+	if err != nil {
+		return nil, err
+	}
+	credentialCiphertext, err := credentialCipher.Encrypt(credentialsJson)
+	if err != nil {
+		return nil, err
+	}
+	authorizedAt := time.Now().UTC()
 
 	// 直接创建ShopLink模型
 	shopLink := &models.ShopLink{
-		Platform:       "shopify",
-		Name:           shopName,
-		Url:            "https://" + shopUrl,
-		ExternalShopID: externalShopID,
-		Credentials:    credentialsJson,
+		Platform:             "shopify",
+		Name:                 shopName,
+		Url:                  "https://" + shopUrl,
+		ExternalShopID:       externalShopID,
+		InstallationStatus:   models.ShopInstallationStatusActive,
+		ShopDomain:           shopUrl,
+		LastAuthorizedAt:     &authorizedAt,
+		CredentialCiphertext: credentialCiphertext,
+		CredentialKeyVersion: credentialCipher.KeyVersion(),
 	}
 
 	db := database.Database()
@@ -204,9 +159,15 @@ func (p *Shopify) HandleCallback(c *pin.Context, businessContext json.RawMessage
 	if err == nil {
 		// Shopify 店铺名称和域名可变，授权复用只以 Shopify shop id 为准。
 		existing.Name = shopName
-		existing.Credentials = credentialsJson
 		existing.Url = "https://" + shopUrl
 		existing.ExternalShopID = externalShopID
+		existing.Credentials = nil
+		existing.InstallationStatus = models.ShopInstallationStatusActive
+		existing.ShopDomain = shopUrl
+		existing.LastAuthorizedAt = &authorizedAt
+		existing.UninstalledAt = nil
+		existing.CredentialCiphertext = credentialCiphertext
+		existing.CredentialKeyVersion = credentialCipher.KeyVersion()
 		if err := db.Save(&existing).Error; err != nil {
 			return nil, errors.ErrShopCreation
 		}
@@ -288,8 +249,7 @@ func (p *Shopify) PutProduct(credential *types.ShopCredential, product *types.Pr
 		return nil, usererrors.New(fmt.Sprintf("Failed to unmarshal credentials: %s", err.Error()))
 	}
 
-	// 商品发布必须复用统一超时配置，避免回落到依赖库默认的 10 秒客户端。
-	client, err := shopify.NewClient(*app, creds.Url, creds.AccessToken, shopify.WithHTTPClient(p.httpClient))
+	client, err := newShopifyGraphQLClient(creds.Url, creds.AccessToken, p.httpClient)
 	if err != nil {
 		return nil, usererrors.New(fmt.Sprintf("Failed to create Shopify client: %s", err.Error()))
 	}
@@ -319,7 +279,11 @@ func (p *Shopify) PutProduct(credential *types.ShopCredential, product *types.Pr
 		}
 	}
 
-	productResp, err := client.Product.Create(ctx, newProduct)
+	productInput, err := shopifyProductSetInput(product, newProduct, true)
+	if err != nil {
+		return nil, usererrors.New(fmt.Sprintf("Failed to convert Shopify GraphQL product: %s", err.Error()))
+	}
+	productResp, metafields, _, err := client.setProduct(ctx, 0, productInput)
 	if err != nil {
 		recoveryCtx, recoveryCancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer recoveryCancel()
@@ -334,26 +298,20 @@ func (p *Shopify) PutProduct(credential *types.ShopCredential, product *types.Pr
 			return nil, &types.PublishResultUncertainError{Cause: fmt.Errorf("Shopify product creation result is uncertain for operation %s: %w", product.PublishOperationID, err)}
 		}
 		if len(matches) == 1 {
-			if deleteErr := deleteAndVerifyShopifyProduct(recoveryCtx, client, matches[0].Id); deleteErr != nil {
-				return nil, &types.PublishResultUncertainError{Cause: fmt.Errorf("failed to remove uncertain Shopify product %d: %w", matches[0].Id, deleteErr)}
+			if deleteErr := deleteAndVerifyShopifyProduct(recoveryCtx, client, matches[0]); deleteErr != nil {
+				return nil, &types.PublishResultUncertainError{Cause: fmt.Errorf("failed to remove uncertain Shopify product %d: %w", matches[0], deleteErr)}
 			}
 		}
 		return nil, usererrors.New(fmt.Sprintf("Failed to create product: %s", err.Error()))
 	}
-	verifiedProduct, err := client.Product.Get(ctx, productResp.Id, nil)
+	verifiedProduct, verifiedMetafields, _, err := client.getProduct(ctx, productResp.Id)
 	if err != nil {
 		if deleteErr := cleanupCreatedShopifyProduct(client, productResp.Id); deleteErr != nil {
 			return nil, &types.PublishResultUncertainError{Cause: fmt.Errorf("failed to delete unverified Shopify product %d: %w", productResp.Id, deleteErr)}
 		}
 		return nil, usererrors.New(fmt.Sprintf("Failed to verify created Shopify product %d: %s", productResp.Id, err.Error()))
 	}
-	metafields, err := client.Product.ListMetafields(ctx, productResp.Id, nil)
-	if err != nil {
-		if deleteErr := cleanupCreatedShopifyProduct(client, productResp.Id); deleteErr != nil {
-			return nil, &types.PublishResultUncertainError{Cause: fmt.Errorf("failed to delete Shopify product %d after identity verification failure: %w", productResp.Id, deleteErr)}
-		}
-		return nil, usererrors.New(fmt.Sprintf("Failed to read Shopify product %d identity: %s", productResp.Id, err.Error()))
-	}
+	metafields = verifiedMetafields
 	verifiedIdentity := map[string]string{}
 	for _, metafield := range metafields {
 		if metafield.Namespace == "effiprint" {
@@ -484,7 +442,7 @@ func (p *Shopify) UpdateProduct(credential *types.ShopCredential, outerID string
 		return nil, usererrors.New(fmt.Sprintf("Failed to unmarshal credentials: %s", err.Error()))
 	}
 
-	client, err := shopify.NewClient(*app, creds.Url, creds.AccessToken)
+	client, err := newShopifyGraphQLClient(creds.Url, creds.AccessToken, p.httpClient)
 	if err != nil {
 		return nil, usererrors.New(fmt.Sprintf("Failed to create Shopify client: %s", err.Error()))
 	}
@@ -501,79 +459,71 @@ func (p *Shopify) UpdateProduct(credential *types.ShopCredential, outerID string
 	var productResp *shopify.Product
 	var shopProduct models.ShopProduct
 	var variantMappings []models.ShopifyVariantMapping
-	if product.SyncMode != "" {
-		if product.SyncMode != types.ProductSyncModeKeep && product.SyncMode != types.ProductSyncModeSelected {
-			return nil, fmt.Errorf("invalid Shopify product sync mode: %s", product.SyncMode)
-		}
-		productResp, err = client.Product.Get(ctx, productID, nil)
-		if err != nil {
-			return nil, normalizeProductUpdateError(err)
-		}
-		identityMetafields, err := client.Product.ListMetafields(ctx, productID, nil)
-		if err != nil {
-			return nil, fmt.Errorf("read EffiPrint Shopify product identity: %w", err)
-		}
-		if err := validateShopifyProductIdentity(identityMetafields, product); err != nil {
-			return nil, err
-		}
-		if err := db.Where(
-			"shop_id = ? AND platform = ? AND outer_id = ? AND publish_operation_id = ?",
-			creds.ShopLinkID,
-			"shopify",
-			outerID,
-			product.PublishOperationID,
-		).First(&shopProduct).Error; err != nil {
-			return nil, fmt.Errorf("query EffiPrint Shopify product mapping: %w", err)
-		}
-		if err := db.Where("shop_product_id = ?", shopProduct.ID).
-			Order("local_variant_id ASC").
-			Find(&variantMappings).Error; err != nil {
-			return nil, fmt.Errorf("query EffiPrint Shopify variant mappings: %w", err)
-		}
-		if err := validateShopifyVariantMappings(productResp.Variants, product.Variants, variantMappings); err != nil {
-			return nil, err
-		}
-		if product.SyncMode == types.ProductSyncModeKeep {
-			return persistVerifiedShopifyProduct(db, &shopProduct, productResp, creds.Url, product)
-		}
+	if product.SyncMode != "" && product.SyncMode != types.ProductSyncModeKeep && product.SyncMode != types.ProductSyncModeSelected {
+		return nil, fmt.Errorf("invalid Shopify product sync mode: %s", product.SyncMode)
+	}
+	productResp, identityMetafields, _, err := client.getProduct(ctx, productID)
+	if err != nil {
+		return nil, normalizeProductUpdateError(err)
+	}
+	if err := validateShopifyProductIdentity(identityMetafields, product); err != nil {
+		return nil, err
+	}
+	if err := db.Where(
+		"shop_id = ? AND platform = ? AND outer_id = ? AND publish_operation_id = ?",
+		creds.ShopLinkID,
+		"shopify",
+		outerID,
+		product.PublishOperationID,
+	).First(&shopProduct).Error; err != nil {
+		return nil, fmt.Errorf("query EffiPrint Shopify product mapping: %w", err)
+	}
+	if err := db.Where("shop_product_id = ?", shopProduct.ID).
+		Order("local_variant_id ASC").
+		Find(&variantMappings).Error; err != nil {
+		return nil, fmt.Errorf("query EffiPrint Shopify variant mappings: %w", err)
+	}
+	if err := validateShopifyVariantMappings(productResp.Variants, product.Variants, variantMappings); err != nil {
+		return nil, err
+	}
+	if product.SyncMode == types.ProductSyncModeKeep {
+		return persistVerifiedShopifyProduct(db, &shopProduct, productResp, creds.Url, product)
 	}
 
 	shopifyProduct, err := p.toShopifyProduct(product)
 	if err != nil {
 		return nil, usererrors.New(fmt.Sprintf("Failed to convert product: %s", err.Error()))
 	}
-	shopifyProduct.Id = productID
-
 	updateFields := productUpdateFieldSet(product.UpdateFields)
-	if len(updateFields) > 0 {
-		shopifyProduct = selectShopifyProductUpdate(shopifyProduct, updateFields)
-		shopifyProduct.Id = productID
-	}
-	if _, selected := updateFields[types.ProductUpdateFieldVariantsPrices]; selected {
-		shopifyProduct.Variants, err = applyShopifyVariantMappings(
-			shopifyProduct.Variants,
-			product.Variants,
-			variantMappings,
-			productID,
-		)
+	if hasShopifyProductFields(updateFields) {
+		var input map[string]any
+		if len(updateFields) == 0 {
+			input, err = shopifyProductSetInput(product, shopifyProduct, false)
+			if err == nil {
+				err = applyShopifyProductSetVariantIDs(input, product.Variants, variantMappings)
+			}
+		} else {
+			input, err = shopifyProductSelectiveSetInput(product, shopifyProduct, *productResp, variantMappings)
+		}
 		if err != nil {
 			return nil, err
 		}
-	}
-
-	if hasShopifyProductFields(updateFields) {
-		productResp, err = client.Product.Update(ctx, shopifyProduct)
+		productResp, _, _, err = client.setProduct(ctx, productID, input)
 		if err != nil {
 			return nil, normalizeProductUpdateError(err)
 		}
 	} else if productResp == nil {
-		productResp, err = client.Product.Get(ctx, productID, nil)
+		productResp, _, _, err = client.getProduct(ctx, productID)
 		if err != nil {
 			return nil, normalizeProductUpdateError(err)
 		}
 	}
-	if _, selected := updateFields[types.ProductUpdateFieldBrandServices]; selected {
-		if err := syncProductBrandServices(ctx, client, productID, product.BrandServices); err != nil {
+	if _, selected := updateFields[types.ProductUpdateFieldBrandServices]; selected || len(updateFields) == 0 {
+		metafield, metafieldErr := shopifyBrandServicesMetafield(product.BrandServices)
+		if metafieldErr != nil {
+			return nil, metafieldErr
+		}
+		if _, err := client.setProductMetafields(ctx, productID, []map[string]any{metafield}); err != nil {
 			return nil, err
 		}
 	}
@@ -750,41 +700,9 @@ func applyShopifyVariantMappings(source []shopify.Variant, local []types.Product
 	return source, nil
 }
 
-func syncProductBrandServices(ctx context.Context, client *shopify.Client, productID uint64, brandServices types.ProductBrandServices) error {
-	value, err := json.Marshal(brandServices)
-	if err != nil {
-		return fmt.Errorf("marshal product brand services: %w", err)
-	}
-	metafields, err := client.Product.ListMetafields(ctx, productID, nil)
-	if err != nil {
-		return fmt.Errorf("list product brand services metafield: %w", err)
-	}
-	metafield := shopify.Metafield{
-		Namespace: "effiprint",
-		Key:       "branding_services",
-		Type:      shopify.MetafieldTypeJSON,
-		Value:     string(value),
-	}
-	for _, current := range metafields {
-		if current.Namespace != metafield.Namespace || current.Key != metafield.Key {
-			continue
-		}
-		metafield.Id = current.Id
-		if _, err := client.Product.UpdateMetafield(ctx, productID, metafield); err != nil {
-			return fmt.Errorf("update product brand services metafield: %w", err)
-		}
-		return nil
-	}
-	if _, err := client.Product.CreateMetafield(ctx, productID, metafield); err != nil {
-		return fmt.Errorf("create product brand services metafield: %w", err)
-	}
-	return nil
-}
-
 // normalizeProductUpdateError 将 Shopify 404 转为稳定业务文案，供异步发布状态安全返回给商城端。
 func normalizeProductUpdateError(err error) error {
-	var responseErr goshopify.ResponseError
-	if stderrors.As(err, &responseErr) && responseErr.Status == http.StatusNotFound {
+	if stderrors.Is(err, errShopifyProductNotFound) {
 		return stderrors.New("This Shopify product no longer exists. Publish it as a new product instead.")
 	}
 	return fmt.Errorf("Failed to update product: %w", err)
@@ -801,7 +719,7 @@ func (p *Shopify) DeleteProduct(credential *types.ShopCredential, outerID string
 		return nil, usererrors.New(fmt.Sprintf("Failed to unmarshal credentials: %s", err.Error()))
 	}
 
-	client, err := shopify.NewClient(*app, creds.Url, creds.AccessToken)
+	client, err := newShopifyGraphQLClient(creds.Url, creds.AccessToken, p.httpClient)
 	if err != nil {
 		return nil, usererrors.New(fmt.Sprintf("Failed to create Shopify client: %s", err.Error()))
 	}
@@ -1037,6 +955,7 @@ func (p *Shopify) StartEventListener() {
 					Payload  json.RawMessage `json:"payload"`
 					Metadata struct {
 						ShopifyTopic string `json:"X-Shopify-Topic"`
+						ShopDomain   string `json:"X-Shopify-Shop-Domain"`
 					} `json:"metadata"`
 				} `json:"detail"`
 			}
@@ -1044,7 +963,7 @@ func (p *Shopify) StartEventListener() {
 			if err := json.Unmarshal([]byte(*message.Body), &eventBridgeMessage); err != nil {
 				fmt.Printf("Error unmarshaling EventBridge message %s: %v\n", *message.MessageId, err)
 				fmt.Printf("Message body: %s\n", *message.Body)
-				if storedEvent, _, busy, storeErr := beginShopifyEvent(*message.MessageId, *message.MessageId, "invalid", "", json.RawMessage(*message.Body)); storeErr != nil {
+				if storedEvent, _, busy, storeErr := beginShopifyEvent(*message.MessageId, *message.MessageId, "invalid", "", "", "eventbridge", json.RawMessage(*message.Body)); storeErr != nil {
 					fmt.Printf("Error recording invalid Shopify event %s: %v\n", *message.MessageId, storeErr)
 				} else if !busy {
 					if storeErr := finishShopifyEvent(*message.MessageId, storedEvent.ProcessingToken, "failed", err); storeErr != nil {
@@ -1066,35 +985,9 @@ func (p *Shopify) StartEventListener() {
 			if eventID == "" {
 				eventID = *message.MessageId
 			}
-			externalShopID := ""
-			var identityErr error
-			if isHandledShopifyOrderTopic(topic) {
-				externalShopID, identityErr = resolveShopifyEventExternalShopID(payload)
-			}
-			storedEvent, terminal, busy, err := beginShopifyEvent(eventID, *message.MessageId, topic, externalShopID, json.RawMessage(*message.Body))
-			if err != nil {
-				fmt.Printf("Error starting Shopify event %s: %v\n", eventID, err)
+			if err := p.ProcessWebhook(ctx, eventID, *message.MessageId, topic, eventBridgeMessage.Detail.Metadata.ShopDomain, "eventbridge", payload); err != nil {
+				fmt.Printf("Error handling Shopify event %s (%s): %v\n", eventID, topic, err)
 				continue
-			}
-			if busy {
-				continue
-			}
-			if !terminal {
-				if identityErr != nil {
-					if err := finishShopifyEvent(eventID, storedEvent.ProcessingToken, "failed", identityErr); err != nil {
-						fmt.Printf("Error recording Shopify event identity failure %s: %v\n", eventID, err)
-					}
-					continue
-				}
-				status, processErr := p.handleWebhookTopic(topic, payload)
-				if err := finishShopifyEvent(eventID, storedEvent.ProcessingToken, status, processErr); err != nil {
-					fmt.Printf("Error finishing Shopify event %s: %v\n", eventID, err)
-					continue
-				}
-				if processErr != nil {
-					fmt.Printf("Error handling Shopify event %s (%s): %v\n", eventID, topic, processErr)
-					continue
-				}
 			}
 
 			// 只有成功或明确忽略的终态事件才能确认 SQS 消息。
@@ -1113,7 +1006,33 @@ func (p *Shopify) StartEventListener() {
 	}
 }
 
-func (p *Shopify) handleWebhookTopic(topic string, payload json.RawMessage) (string, error) {
+func (p *Shopify) ProcessWebhook(ctx context.Context, eventID, messageID, topic, shopDomain, deliveryMethod string, payload json.RawMessage) error {
+	externalShopID := ""
+	var identityErr error
+	if isHandledShopifyOrderTopic(topic) {
+		externalShopID, identityErr = resolveShopifyEventExternalShopID(payload)
+	}
+	storedEvent, terminal, busy, err := beginShopifyEvent(eventID, messageID, topic, externalShopID, shopDomain, deliveryMethod, payload)
+	if err != nil {
+		return fmt.Errorf("start Shopify event %s: %w", eventID, err)
+	}
+	if terminal || busy {
+		return nil
+	}
+	if identityErr != nil {
+		if err := finishShopifyEvent(eventID, storedEvent.ProcessingToken, "failed", identityErr); err != nil {
+			return fmt.Errorf("record Shopify event identity failure %s: %w", eventID, err)
+		}
+		return identityErr
+	}
+	status, processErr := p.handleWebhookTopic(ctx, eventID, topic, shopDomain, payload)
+	if err := finishShopifyEvent(eventID, storedEvent.ProcessingToken, status, processErr); err != nil {
+		return fmt.Errorf("finish Shopify event %s: %w", eventID, err)
+	}
+	return processErr
+}
+
+func (p *Shopify) handleWebhookTopic(ctx context.Context, eventID string, topic string, shopDomain string, payload json.RawMessage) (string, error) {
 	var err error
 	switch topic {
 	case "orders/create":
@@ -1126,6 +1045,10 @@ func (p *Shopify) handleWebhookTopic(topic string, payload json.RawMessage) (str
 		err = p.handleOrderCancelled(payload)
 	case "orders/fulfilled":
 		err = p.handleOrderFulfilled(payload)
+	case "app/uninstalled":
+		err = p.handleAppUninstalled(ctx, eventID, shopDomain, payload)
+	case "customers/data_request", "customers/redact", "shop/redact":
+		err = p.handlePrivacyWebhook(ctx, eventID, topic, shopDomain, payload)
 	default:
 		return "ignored", nil
 	}
@@ -1133,6 +1056,54 @@ func (p *Shopify) handleWebhookTopic(topic string, payload json.RawMessage) (str
 		return "failed", err
 	}
 	return "success", nil
+}
+
+func (p *Shopify) handleAppUninstalled(ctx context.Context, eventID string, shopDomain string, payload json.RawMessage) error {
+	data := struct {
+		Domain string `json:"domain"`
+	}{}
+	if err := json.Unmarshal(payload, &data); err != nil {
+		return fmt.Errorf("parse Shopify app uninstall event: %w", err)
+	}
+	if shopDomain == "" || data.Domain != shopDomain {
+		return fmt.Errorf("Shopify app uninstall shop domain does not match delivery metadata")
+	}
+	return events.EmitShopifyAppUninstalled(&types.ShopifyAppUninstalledEvent{
+		WebhookID: eventID, ShopDomain: shopDomain, OccurredAt: time.Now().UTC(),
+	})
+}
+
+func (p *Shopify) handlePrivacyWebhook(ctx context.Context, eventID string, topic string, shopDomain string, payload json.RawMessage) error {
+	data := struct {
+		ShopDomain string `json:"shop_domain"`
+		Customer   struct {
+			ID uint64 `json:"id"`
+		} `json:"customer"`
+		OrdersRequested []uint64 `json:"orders_requested"`
+		OrdersToRedact  []uint64 `json:"orders_to_redact"`
+	}{}
+	if err := json.Unmarshal(payload, &data); err != nil {
+		return fmt.Errorf("parse Shopify privacy event: %w", err)
+	}
+	if shopDomain == "" || data.ShopDomain != shopDomain {
+		return fmt.Errorf("Shopify privacy shop domain does not match delivery metadata")
+	}
+	orderIDs := data.OrdersRequested
+	if topic == "customers/redact" {
+		orderIDs = data.OrdersToRedact
+	}
+	formattedOrderIDs := make([]string, 0, len(orderIDs))
+	for _, orderID := range orderIDs {
+		formattedOrderIDs = append(formattedOrderIDs, strconv.FormatUint(orderID, 10))
+	}
+	customerID := ""
+	if data.Customer.ID != 0 {
+		customerID = strconv.FormatUint(data.Customer.ID, 10)
+	}
+	return events.EmitShopifyPrivacy(&types.ShopifyPrivacyEvent{
+		WebhookID: eventID, Topic: topic, ShopDomain: shopDomain, CustomerID: customerID,
+		OrderIDs: formattedOrderIDs, OccurredAt: time.Now().UTC(),
+	})
 }
 
 func isHandledShopifyOrderTopic(topic string) bool {

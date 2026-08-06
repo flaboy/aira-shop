@@ -19,11 +19,11 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-func beginShopifyEvent(eventID string, messageID string, topic string, externalShopID string, payload json.RawMessage) (*models.ShopifyEvent, bool, bool, error) {
-	return beginShopifyEventWithDB(database.Database(), eventID, messageID, topic, externalShopID, payload, time.Now().UTC())
+func beginShopifyEvent(eventID string, messageID string, topic string, externalShopID string, shopDomain string, deliveryMethod string, payload json.RawMessage) (*models.ShopifyEvent, bool, bool, error) {
+	return beginShopifyEventWithDB(database.Database(), eventID, messageID, topic, externalShopID, shopDomain, deliveryMethod, payload, time.Now().UTC())
 }
 
-func beginShopifyEventWithDB(db *gorm.DB, eventID string, messageID string, topic string, externalShopID string, payload json.RawMessage, now time.Time) (*models.ShopifyEvent, bool, bool, error) {
+func beginShopifyEventWithDB(db *gorm.DB, eventID string, messageID string, topic string, externalShopID string, shopDomain string, deliveryMethod string, payload json.RawMessage, now time.Time) (*models.ShopifyEvent, bool, bool, error) {
 	processingToken := messageID + "-" + strconv.FormatInt(now.UnixNano(), 10)
 	event := &models.ShopifyEvent{}
 	terminal := false
@@ -51,6 +51,8 @@ func beginShopifyEventWithDB(db *gorm.DB, eventID string, messageID string, topi
 		event.MessageID = messageID
 		event.Topic = topic
 		event.ExternalShopID = externalShopID
+		event.ShopDomain = shopDomain
+		event.DeliveryMethod = deliveryMethod
 		event.Status = "processing"
 		event.ProcessingToken = processingToken
 		event.LeaseUntil = now.Add(15 * time.Minute)

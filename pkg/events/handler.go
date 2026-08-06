@@ -12,6 +12,8 @@ type EventHandler interface {
 	OnOrderUpdated(event *types.OrderStatusChangedEvent) error
 	OnOrderCancelled(event *types.OrderStatusChangedEvent) error
 	OnOrderFulfilled(event *types.OrderStatusChangedEvent) error
+	OnShopifyAppUninstalled(event *types.ShopifyAppUninstalledEvent) error
+	OnShopifyPrivacy(event *types.ShopifyPrivacyEvent) error
 	OnPaymentCompleted(event *types.PaymentCompletedEvent) error
 }
 
@@ -66,6 +68,20 @@ func EmitOrderCancelled(event *types.OrderStatusChangedEvent) error {
 func EmitOrderFulfilled(event *types.OrderStatusChangedEvent) error {
 	if handler != nil {
 		return handler.OnOrderFulfilled(event)
+	}
+	return nil
+}
+
+func EmitShopifyAppUninstalled(event *types.ShopifyAppUninstalledEvent) error {
+	if handler != nil {
+		return handler.OnShopifyAppUninstalled(event)
+	}
+	return nil
+}
+
+func EmitShopifyPrivacy(event *types.ShopifyPrivacyEvent) error {
+	if handler != nil {
+		return handler.OnShopifyPrivacy(event)
 	}
 	return nil
 }

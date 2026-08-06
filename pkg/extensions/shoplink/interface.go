@@ -24,6 +24,8 @@ type ShopPlatform interface {
 	AuditProducts(credential *types.ShopCredential, externalShopID string) ([]types.ProductAuditIssue, error)
 	CleanupPublishOperation(credential *types.ShopCredential, operationID string) error
 	PullOrders(ctx context.Context, credential *types.ShopCredential, request types.OrderPullRequest) (*types.OrderPullResult, error)
+	SyncFulfillment(ctx context.Context, credential *types.ShopCredential, fulfillment types.FulfillmentData) (*types.FulfillmentResult, error)
+	ProcessWebhook(ctx context.Context, eventID, messageID, topic, shopDomain, deliveryMethod string, payload json.RawMessage) error
 
 	// 处理公开请求（如OAuth授权）
 	HandleRequest(c *pin.Context, path string) (*types.HandleRequestResult, error)

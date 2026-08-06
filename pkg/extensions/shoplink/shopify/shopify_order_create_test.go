@@ -64,7 +64,7 @@ func TestShopifyConsumerKeepsFailedMessagesForRetry(t *testing.T) {
 	}
 
 	content := string(source)
-	failureGate := strings.Index(content, `if processErr != nil {`)
+	failureGate := strings.Index(content, `if err := p.ProcessWebhook(`)
 	deleteMessage := strings.Index(content, `client.DeleteMessage`)
 	if failureGate < 0 || deleteMessage < 0 || failureGate > deleteMessage {
 		t.Fatal("Shopify consumer must stop failed events before DeleteMessage")

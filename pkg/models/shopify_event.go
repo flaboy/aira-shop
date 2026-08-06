@@ -13,6 +13,8 @@ type ShopifyEvent struct {
 	MessageID       string `gorm:"size:128;index"`
 	Topic           string `gorm:"size:64;index"`
 	ExternalShopID  string `gorm:"size:64;index"`
+	ShopDomain      string `gorm:"size:255;index"`
+	DeliveryMethod  string `gorm:"size:16;index"`
 	PayloadHash     string `gorm:"size:64;index"`
 	Status          string `gorm:"size:16;index"`
 	AttemptCount    uint

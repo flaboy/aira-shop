@@ -2,6 +2,7 @@ package shoplink
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/flaboy/aira-core/pkg/database"
 	"github.com/flaboy/aira-shop/pkg/extensions/shoplink/shopify"
@@ -38,6 +39,9 @@ func GetSupportedPlatforms() []string {
 
 // 新增函数
 func CreateShop(platform, name, url string, credentials json.RawMessage) (*models.ShopLink, error) {
+	if platform == "shopify" {
+		return nil, fmt.Errorf("Shopify installation must use encrypted credential storage")
+	}
 	shopLink := &models.ShopLink{
 		Platform:    platform,
 		Name:        name,

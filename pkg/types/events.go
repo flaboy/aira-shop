@@ -135,6 +135,21 @@ type OrderStatusChangedEvent struct {
 	CreatedAt         time.Time              `json:"created_at"`
 }
 
+type ShopifyAppUninstalledEvent struct {
+	WebhookID  string    `json:"webhook_id"`
+	ShopDomain string    `json:"shop_domain"`
+	OccurredAt time.Time `json:"occurred_at"`
+}
+
+type ShopifyPrivacyEvent struct {
+	WebhookID  string    `json:"webhook_id"`
+	Topic      string    `json:"topic"`
+	ShopDomain string    `json:"shop_domain"`
+	CustomerID string    `json:"customer_id"`
+	OrderIDs   []string  `json:"order_ids"`
+	OccurredAt time.Time `json:"occurred_at"`
+}
+
 type PaymentCompletedEvent struct {
 	TX              *gorm.DB
 	PaymentHashID   string           `json:"payment_hash_id"`
