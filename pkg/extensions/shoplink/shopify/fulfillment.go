@@ -48,7 +48,7 @@ type shopifyFulfillmentOrderNode struct {
 }
 
 func (p *Shopify) SyncFulfillment(ctx context.Context, credential *types.ShopCredential, fulfillment types.FulfillmentData) (*types.FulfillmentResult, error) {
-	if credential == nil || fulfillment.OrderID == "" || fulfillment.Carrier == "" || fulfillment.TrackingNumber == "" {
+	if credential == nil || fulfillment.OrderID == "" || fulfillment.TrackingNumber == "" {
 		return nil, fmt.Errorf("Shopify fulfillment input is incomplete")
 	}
 	credentialData, err := json.Marshal(credential.Data)
@@ -117,7 +117,10 @@ func (c *shopifyGraphQLClient) createFulfillment(ctx context.Context, fulfillmen
     userErrors { field message }
   }
 }`
-	trackingInfo := map[string]any{"company": fulfillment.Carrier, "number": fulfillment.TrackingNumber}
+	trackingInfo := map[string]any{"number": fulfillment.TrackingNumber}
+	if fulfillment.Carrier != "" {
+		trackingInfo["company"] = fulfillment.Carrier
+	}
 	if fulfillment.TrackingURL != "" {
 		trackingInfo["url"] = fulfillment.TrackingURL
 	}

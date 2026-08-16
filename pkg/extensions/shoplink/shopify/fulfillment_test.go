@@ -51,6 +51,33 @@ func TestShopifyFulfillmentUsesGraphQL202607AndNotifiesCustomer(t *testing.T) {
 	require.Equal(t, 2, requestCount)
 }
 
+func TestShopifyFulfillmentOmitsEmptyCarrier(t *testing.T) {
+	requestCount := 0
+	platform := &Shopify{httpClient: &http.Client{Transport: orderPullRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requestCount++
+		if requestCount == 1 {
+			return jsonResponse(http.StatusOK, `{"data":{"order":{"fulfillments":[],"fulfillmentOrders":{"nodes":[{"id":"gid://shopify/FulfillmentOrder/81","status":"OPEN"}],"pageInfo":{"hasNextPage":false}}}}}`), nil
+		}
+		var payload struct {
+			Variables map[string]any `json:"variables"`
+		}
+		require.NoError(t, json.NewDecoder(request.Body).Decode(&payload))
+		tracking := payload.Variables["fulfillment"].(map[string]any)["trackingInfo"].(map[string]any)
+		require.Equal(t, "1Z999", tracking["number"])
+		_, hasCompany := tracking["company"]
+		if hasCompany {
+			t.Fatal("空承运商不应写入 Shopify trackingInfo.company")
+		}
+		return jsonResponse(http.StatusOK, `{"data":{"fulfillmentCreate":{"fulfillment":{"id":"gid://shopify/Fulfillment/91"},"userErrors":[]}}}`), nil
+	})}}
+
+	result, err := platform.SyncFulfillment(context.Background(), &types.ShopCredential{Data: map[string]any{
+		"Url": "verified-shop.myshopify.com", "AccessToken": "access-token",
+	}}, types.FulfillmentData{OrderID: "1001", TrackingNumber: "1Z999"})
+	require.NoError(t, err)
+	require.Equal(t, "gid://shopify/Fulfillment/91", result.ID)
+}
+
 func TestShopifyFulfillmentConvergesFromExistingTrackingNumber(t *testing.T) {
 	requestCount := 0
 	client, err := newShopifyGraphQLClient("verified-shop.myshopify.com", "access-token", recordingHTTPDoer(func(*http.Request) (*http.Response, error) {
