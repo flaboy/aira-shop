@@ -103,12 +103,19 @@ func (t *The17Track) HandleRequest(c *pin.Context, path string) error {
 	if path == "webhook" {
 
 		event := TrackEvent{}
-		if err := c.Bind(&event); err != nil {
-			fmt.Println("Error binding request data:", err)
+		if err := c.ShouldBindJSON(&event); err != nil {
+			c.JSON(400, map[string]string{"error": "Invalid tracking payload"})
+			return nil
 		}
 
 		if event.Event == "TRACKING_UPDATED" {
-			err := utils.UpdateStatus(event.Data.Number, t.convertStatus(event.Data.TrackInfo.LatestStatus.Status))
+			deliveredAt, err := event.Data.TrackInfo.DeliveredAt()
+			if err != nil {
+				slog.Error("17TRACK 签收时间无效", "trackingNumber", event.Data.Number, "error", err)
+				c.JSON(400, map[string]string{"error": "Invalid delivered milestone time"})
+				return nil
+			}
+			err = utils.UpdateStatus(event.Data.Number, t.convertStatus(event.Data.TrackInfo.LatestStatus.Status), deliveredAt)
 			if err != nil {
 				slog.Error("Error updating status", "trackingNumber", event.Data.Number, "error", err)
 				c.JSON(500, map[string]string{
