@@ -105,19 +105,18 @@ func (p *Shopify) HandleCallback(c *pin.Context, businessContext json.RawMessage
 		return nil, errors.ErrAccessTokenFailed
 	}
 
-	// 使用自定义HTTP客户端创建Shopify客户端
-	client, err := shopify.NewClient(*app, shopUrl, token, shopify.WithHTTPClient(p.httpClient))
+	identityClient, err := NewTokenExchangeClient(config.Config.Shopify.ApiKey, config.Config.Shopify.ApiSecret, p.httpClient, time.Now)
 	if err != nil {
 		return nil, errors.ErrShopifyClientCreation
 	}
-
-	shopInfo, err := client.Shop.Get(ctx, nil)
+	shopIdentity, err := identityClient.FetchShopIdentity(ctx, shopUrl, token)
 	if err != nil {
 		return nil, errors.ErrShopInfoFailed
 	}
 
-	shopName := shopInfo.Name
-	externalShopID := strconv.FormatUint(shopInfo.Id, 10)
+	shopUrl = shopIdentity.ShopDomain
+	shopName := shopIdentity.Name
+	externalShopID := shopIdentity.ExternalShopID
 
 	credentials := ShopifyCredential{
 		Url:         shopUrl,
