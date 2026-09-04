@@ -1,5 +1,10 @@
 package the17track
 
+import (
+	"fmt"
+	"time"
+)
+
 // https://api.17track.net/en/doc?version=v2.2&anchor=webhook
 
 type TrackEvent struct {
@@ -114,6 +119,34 @@ type Milestone struct {
 	TimeISO  string  `json:"time_iso"`
 	TimeUTC  string  `json:"time_utc"`
 	TimeRaw  TimeRaw `json:"time_raw"`
+}
+
+// DeliveredAt 仅解析签收里程碑的来源时间，不使用最新事件或处理时间代替。
+func (info TrackInfo) DeliveredAt() (int64, error) {
+	if info.LatestStatus.Status != "Delivered" {
+		return 0, nil
+	}
+	var deliveredAt int64
+	for _, milestone := range info.Milestone {
+		if milestone.KeyStage != "Delivered" {
+			continue
+		}
+		if deliveredAt != 0 {
+			return 0, fmt.Errorf("17TRACK 返回多个签收里程碑")
+		}
+		delivered, err := time.Parse(time.RFC3339, milestone.TimeUTC)
+		if err != nil {
+			return 0, err
+		}
+		if delivered.Unix() <= 0 || delivered.After(time.Now()) {
+			return 0, fmt.Errorf("17TRACK 签收时间无效")
+		}
+		deliveredAt = delivered.Unix()
+	}
+	if deliveredAt == 0 {
+		return 0, fmt.Errorf("17TRACK 已签收但缺少签收里程碑时间")
+	}
+	return deliveredAt, nil
 }
 
 type MiscInfo struct {
