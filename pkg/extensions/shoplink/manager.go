@@ -1,32 +1,72 @@
 package shoplink
 
 import (
-	"encoding/json"
 	"fmt"
 
-	"github.com/flaboy/aira-core/pkg/database"
 	"github.com/flaboy/aira-shop/pkg/extensions/shoplink/shopify"
-	"github.com/flaboy/aira-shop/pkg/models"
-	"gorm.io/gorm"
 )
 
-var platforms map[string]ShopPlatform
+var platforms map[string]Platform
+
+var _ ShopPlatform = (*shopify.Shopify)(nil)
 
 func Init() error {
-	platforms = make(map[string]ShopPlatform)
+	platforms = make(map[string]Platform)
 
 	// 注册Shopify平台
-	shopifyPlatform := &shopify.Shopify{}
-	if err := shopifyPlatform.Init(); err != nil {
-		return err
-	}
-	platforms[shopifyPlatform.GetPlatformName()] = shopifyPlatform
+	return Register(&shopify.Shopify{})
+}
 
+func Register(platform Platform) error {
+	if platform == nil || platform.GetPlatformName() == "" {
+		return fmt.Errorf("shop platform registration is incomplete")
+	}
+	if platforms == nil {
+		platforms = make(map[string]Platform)
+	}
+	name := platform.GetPlatformName()
+	if _, exists := platforms[name]; exists {
+		return fmt.Errorf("shop platform already registered: %s", name)
+	}
+	if err := platform.Init(); err != nil {
+		return fmt.Errorf("initialize shop platform %s: %w", name, err)
+	}
+	platforms[name] = platform
 	return nil
 }
 
-func Get(platformName string) ShopPlatform {
+func getPlatform(platformName string) Platform {
 	return platforms[platformName]
+}
+
+func GetAuthorizationProvider(platformName string) AuthorizationProvider {
+	provider, _ := getPlatform(platformName).(AuthorizationProvider)
+	return provider
+}
+
+func GetOAuthProvider(platformName string) OAuthProvider {
+	provider, _ := getPlatform(platformName).(OAuthProvider)
+	return provider
+}
+
+func GetProductProvider(platformName string) ProductProvider {
+	provider, _ := getPlatform(platformName).(ProductProvider)
+	return provider
+}
+
+func GetOrderProvider(platformName string) OrderProvider {
+	provider, _ := getPlatform(platformName).(OrderProvider)
+	return provider
+}
+
+func GetFulfillmentProvider(platformName string) FulfillmentProvider {
+	provider, _ := getPlatform(platformName).(FulfillmentProvider)
+	return provider
+}
+
+func GetWebhookProvider(platformName string) WebhookProvider {
+	provider, _ := getPlatform(platformName).(WebhookProvider)
+	return provider
 }
 
 func GetSupportedPlatforms() []string {
@@ -35,40 +75,4 @@ func GetSupportedPlatforms() []string {
 		names = append(names, name)
 	}
 	return names
-}
-
-// 新增函数
-func CreateShop(platform, name, url string, credentials json.RawMessage) (*models.ShopLink, error) {
-	if platform == "shopify" {
-		return nil, fmt.Errorf("Shopify installation must use encrypted credential storage")
-	}
-	shopLink := &models.ShopLink{
-		Platform:    platform,
-		Name:        name,
-		Url:         url,
-		Credentials: credentials,
-	}
-
-	db := database.Database()
-
-	// 检查是否已存在
-	var existing models.ShopLink
-	err := db.Where("name = ? AND platform = ?", name, platform).First(&existing).Error
-	if err == nil {
-		// 更新现有记录
-		existing.Credentials = credentials
-		existing.Url = url
-		return &existing, db.Save(&existing).Error
-	}
-
-	if err != gorm.ErrRecordNotFound {
-		return nil, err
-	}
-
-	// 创建新记录
-	if err := db.Create(shopLink).Error; err != nil {
-		return nil, err
-	}
-
-	return shopLink, nil
 }

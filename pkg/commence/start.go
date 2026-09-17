@@ -12,7 +12,9 @@ func Start(cfg *config.CommenceConfig) error {
 	config.Config = cfg
 
 	// 启动服务组件
-	shoplink.Init()
+	if err := shoplink.Init(); err != nil {
+		return err
+	}
 	payment.Init()
 	tracking.Init()
 
