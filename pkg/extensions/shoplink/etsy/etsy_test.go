@@ -77,3 +77,48 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return fn(request)
 }
+
+func TestEtsyScopedAuthorizationAcceptsOnlySupportedScopes(t *testing.T) {
+	provider, err := New(Config{APIKey: "key", SharedSecret: "secret", RedirectURL: "https://app.example.test/callback", OAuthBaseURL: "https://www.etsy.test", APIBaseURL: "https://api.etsy.test", HTTPClient: http.DefaultClient})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name   string
+		scopes []string
+		want   string
+	}{
+		{"initial", []string{"shops_r"}, "shops_r"},
+		{"publication", []string{"shops_r", "listings_r", "listings_w"}, "shops_r listings_r listings_w"},
+		{"retained read scope", []string{"listings_r", "shops_r"}, "shops_r listings_r"},
+		{"deduplicated", []string{"listings_w", "shops_r", "listings_r", "shops_r"}, "shops_r listings_r listings_w"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			value, err := provider.AuthorizationURLForScopes("state", "challenge", tt.scopes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			parsed, err := url.Parse(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertEqual(t, tt.want, parsed.Query().Get("scope"))
+			assertEqual(t, "state", parsed.Query().Get("state"))
+			assertEqual(t, "S256", parsed.Query().Get("code_challenge_method"))
+		})
+	}
+	for _, scopes := range [][]string{nil, {}, {"listings_w"}, {"shops_r", "listings_d"}, {"shops_r", "transactions_r"}, {"shops_r", ""}, {"shops_r", "listings_r listings_w"}} {
+		if _, err := provider.AuthorizationURLForScopes("state", "challenge", scopes); err == nil {
+			t.Fatalf("unsupported scope set accepted: %q", scopes)
+		}
+	}
+	initial, err := provider.AuthorizationURL("state", "challenge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertEqual(t, "shops_r", parsed.Query().Get("scope"))
+}

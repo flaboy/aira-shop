@@ -49,8 +49,23 @@ func GetOAuthProvider(platformName string) OAuthProvider {
 	return provider
 }
 
+func GetScopedOAuthProvider(platformName string) ScopedOAuthProvider {
+	provider, _ := getPlatform(platformName).(ScopedOAuthProvider)
+	return provider
+}
+
 func GetProductProvider(platformName string) ProductProvider {
 	provider, _ := getPlatform(platformName).(ProductProvider)
+	return provider
+}
+
+func GetPublicationProvider(platformName string) PublicationProvider {
+	provider, _ := getPlatform(platformName).(PublicationProvider)
+	return provider
+}
+
+func GetPublicationConfigurationProvider(platformName string) PublicationConfigurationProvider {
+	provider, _ := getPlatform(platformName).(PublicationConfigurationProvider)
 	return provider
 }
 

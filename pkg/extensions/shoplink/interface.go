@@ -38,6 +38,12 @@ type OAuthProvider interface {
 	ResolveShopIdentity(ctx context.Context, accessToken string) (types.ShopIdentity, error)
 }
 
+// ScopedOAuthProvider 只接受平台认可的 scope 组合；不改变既有最小授权接口。
+type ScopedOAuthProvider interface {
+	OAuthProvider
+	AuthorizationURLForScopes(state, codeChallenge string, scopes []string) (string, error)
+}
+
 type ProductProvider interface {
 	Platform
 
@@ -51,6 +57,25 @@ type ProductProvider interface {
 	DeleteProduct(credential *types.ShopCredential, outerID string) (*types.DeleteProductResult, error)
 	AuditProducts(credential *types.ShopCredential, externalShopID string) ([]types.ProductAuditIssue, error)
 	CleanupPublishOperation(credential *types.ShopCredential, operationID string) error
+}
+
+// PublicationProvider 支持分步、可取消的发布协议；不要求远端删除能力。
+// 每一步均由 service 持久化事实后继续，未知写入不得直接重发。
+type PublicationProvider interface {
+	Platform
+	CreateDraft(context.Context, *types.ShopCredential, types.PublicationRequest) (*types.PublicationSnapshot, error)
+	UpdateListing(context.Context, *types.ShopCredential, types.PublicationRequest) (*types.PublicationSnapshot, error)
+	UploadListingImage(context.Context, *types.ShopCredential, types.PublicationImageRequest) (*types.PublicationImage, error)
+	ReplaceListingInventory(context.Context, *types.ShopCredential, types.PublicationRequest) ([]types.PublicationVariantMapping, error)
+	InspectListingInventory(context.Context, *types.ShopCredential, types.PublicationRequest) ([]types.PublicationVariantMapping, error)
+	ActivateListing(context.Context, *types.ShopCredential, types.PublicationTarget) (*types.PublicationSnapshot, error)
+	InspectListing(context.Context, *types.ShopCredential, types.PublicationTarget) (*types.PublicationSnapshot, error)
+}
+
+// PublicationConfigurationProvider 只读取当前店铺可选择的配置，不修改全局设置。
+type PublicationConfigurationProvider interface {
+	Platform
+	QueryPublicationConfiguration(context.Context, *types.ShopCredential, types.PublicationConfigurationQuery) (*types.PublicationConfigurationResult, error)
 }
 
 type OrderProvider interface {

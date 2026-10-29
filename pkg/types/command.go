@@ -89,6 +89,7 @@ type ProductData struct {
 	ProductName        string               `json:"product_name"`
 	PublishOperationID string               `json:"publish_operation_id"`
 	OriginProductID    string               `json:"origin_product_id"`
+	SourceVersion      string               `json:"source_version,omitempty"` // 发布源快照版本，仅用于本地意图摘要，不发送第三方
 	ExternalShopID     string               `json:"external_shop_id"`
 	BodyHTML           string               `json:"body_html"`
 	Tags               string               `json:"tags"`

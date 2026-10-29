@@ -65,6 +65,29 @@ func (p *Etsy) RequiredScopes() []string {
 }
 
 func (p *Etsy) AuthorizationURL(state, codeChallenge string) (string, error) {
+	return p.AuthorizationURLForScopes(state, codeChallenge, []string{"shops_r"})
+}
+
+// AuthorizationURLForScopes 仅允许当前实现的店铺读取与商品读写权限；删除等能力未开放。
+func (p *Etsy) AuthorizationURLForScopes(state, codeChallenge string, scopes []string) (string, error) {
+	requested := make(map[string]bool, len(scopes))
+	for _, scope := range scopes {
+		switch scope {
+		case "shops_r", "listings_r", "listings_w":
+			requested[scope] = true
+		default:
+			return "", fmt.Errorf("Etsy authorization scope is not supported")
+		}
+	}
+	if !requested["shops_r"] {
+		return "", fmt.Errorf("Etsy authorization requires shops_r")
+	}
+	normalized := make([]string, 0, len(requested))
+	for _, scope := range []string{"shops_r", "listings_r", "listings_w"} {
+		if requested[scope] {
+			normalized = append(normalized, scope)
+		}
+	}
 	authorizeURL, err := url.Parse(strings.TrimRight(p.config.OAuthBaseURL, "/") + "/oauth/connect")
 	if err != nil {
 		return "", fmt.Errorf("build Etsy authorize URL: %w", err)
@@ -72,7 +95,7 @@ func (p *Etsy) AuthorizationURL(state, codeChallenge string) (string, error) {
 	query := authorizeURL.Query()
 	query.Set("response_type", "code")
 	query.Set("redirect_uri", p.config.RedirectURL)
-	query.Set("scope", strings.Join(RequiredScopes, " "))
+	query.Set("scope", strings.Join(normalized, " "))
 	query.Set("client_id", p.config.APIKey)
 	query.Set("state", state)
 	query.Set("code_challenge", codeChallenge)
