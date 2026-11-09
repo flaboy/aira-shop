@@ -91,3 +91,42 @@ func TestResolveShopifyEventRejectsUnmappedProduct(t *testing.T) {
 		t.Fatal("未映射商品不能通过 URL 或其他候选身份继续处理")
 	}
 }
+
+// 用真实SQLite触发器模拟MySQL严格日期下界，防止内部释放租约写零日期。
+func TestShopifyEventFinishReleasesLeaseWithValidDate(t *testing.T) {
+	for _, state := range []string{"ignored", "failed"} {
+		t.Run(state, func(t *testing.T) {
+			db := newShopifyEventTestDB(t)
+			if err := db.Exec(`CREATE TRIGGER reject_zero_lease BEFORE UPDATE OF lease_until ON ar_shopify_events WHEN NEW.lease_until < '1000-01-01' BEGIN SELECT RAISE(ABORT,'strict datetime rejects zero lease'); END;`).Error; err != nil {
+				t.Fatal(err)
+			}
+			now := time.Date(2026, 10, 26, 4, 0, 0, 0, time.UTC)
+			event, _, _, err := beginShopifyEventWithDB(db, "event-valid-lease", "message-valid-lease", "e2e/unsupported", "", "owned.myshopify.com", "https", json.RawMessage(`{"owned":true}`), now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var processErr error
+			if state == "failed" {
+				processErr = gorm.ErrInvalidData
+			}
+			finished := now.Add(time.Second)
+			if err := finishShopifyEventWithDB(db, event.EventID, event.ProcessingToken, state, processErr, finished); err != nil {
+				t.Fatal(err)
+			}
+			var actual models.ShopifyEvent
+			if err := db.Where("event_id = ?", event.EventID).First(&actual).Error; err != nil {
+				t.Fatal(err)
+			}
+			var attempt models.ShopifyEventAttempt
+			if err := db.Where("event_id = ?", event.EventID).First(&attempt).Error; err != nil {
+				t.Fatal(err)
+			}
+			if actual.Status != state || actual.ProcessingToken != "" || !actual.LeaseUntil.Equal(finished) || actual.LeaseUntil.After(finished) || actual.AttemptCount != 1 || attempt.Status != state || attempt.FinishedAt == nil || !attempt.FinishedAt.Equal(finished) {
+				t.Fatalf("finish must atomically release valid lease and finish one owned attempt: %+v / %+v", actual, attempt)
+			}
+			if state == "ignored" && actual.CompletedAt == nil || state == "failed" && (actual.CompletedAt != nil || actual.LastError != gorm.ErrInvalidData.Error()) {
+				t.Fatal("original completed/error contract changed")
+			}
+		})
+	}
+}

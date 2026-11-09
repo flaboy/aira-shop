@@ -85,7 +85,7 @@ func finishShopifyEventWithDB(db *gorm.DB, eventID string, processingToken strin
 		"status":           status,
 		"completed_at":     &now,
 		"processing_token": "",
-		"lease_until":      time.Time{},
+		"lease_until":      now,
 	}
 	if processErr != nil {
 		updates["last_error"] = processErr.Error()
@@ -176,13 +176,13 @@ func RequeueEvent(eventID string) error {
 		MessageBody: aws.String(string(event.Payload)),
 	}); err != nil {
 		if restoreErr := database.Database().Model(event).Where("processing_token = ?", requeueToken).Updates(map[string]interface{}{
-			"status": "failed", "processing_token": "", "lease_until": time.Time{},
+			"status": "failed", "processing_token": "", "lease_until": now,
 		}).Error; restoreErr != nil {
 			return fmt.Errorf("restore Shopify event after requeue failure: %w", restoreErr)
 		}
 		return fmt.Errorf("requeue Shopify event: %w", err)
 	}
 	return database.Database().Model(event).Where("processing_token = ?", requeueToken).Updates(map[string]interface{}{
-		"status": "queued", "last_error": "", "processing_token": "", "lease_until": time.Time{},
+		"status": "queued", "last_error": "", "processing_token": "", "lease_until": now,
 	}).Error
 }

@@ -171,7 +171,7 @@ func DeleteTags(targetType string, tx *gorm.DB, targetID uint, tagNames []string
 		}
 
 		// Use strings.Join to create comma-separated SET clause
-		updateSQL := fmt.Sprintf("UPDATE tags SET %s WHERE id = ?", strings.Join(updateParts, ", "))
+		updateSQL := fmt.Sprintf("UPDATE %s SET %s WHERE id = ?", (addon.Tags{}).TableName(), strings.Join(updateParts, ", "))
 
 		if err := tx.Exec(updateSQL, targetTags.ID).Error; err != nil {
 			return err
