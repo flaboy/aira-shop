@@ -74,6 +74,20 @@ func GetOrderProvider(platformName string) OrderProvider {
 	return provider
 }
 
+func GetOrderSourceProvider(platformName string) OrderSourceProvider {
+	provider, _ := getPlatform(platformName).(OrderSourceProvider)
+	return provider
+}
+
+// GetOrderSourceTimeZone 返回已登记来源实际采用的时间口径。
+func GetOrderSourceTimeZone(platformName string) string {
+	provider, ok := GetOrderSourceProvider(platformName).(interface{ SourceTimeZone() string })
+	if !ok {
+		return ""
+	}
+	return provider.SourceTimeZone()
+}
+
 func GetFulfillmentProvider(platformName string) FulfillmentProvider {
 	provider, _ := getPlatform(platformName).(FulfillmentProvider)
 	return provider

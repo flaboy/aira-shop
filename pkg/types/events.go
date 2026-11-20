@@ -151,12 +151,14 @@ type ShopifyPrivacyEvent struct {
 }
 
 type PaymentCompletedEvent struct {
-	TX              *gorm.DB
-	PaymentHashID   string           `json:"payment_hash_id"`
-	Channel         string           `json:"channel"` // paypal, stripe等
-	Amount          *decimal.Decimal `json:"amount"`
-	Currency        string           `json:"currency"`
-	ExternalOrderID string           `json:"external_order_id"`
-	BusinessContext json.RawMessage  `json:"business_context"`
-	CompletedAt     time.Time        `json:"completed_at"`
+	TX                *gorm.DB
+	PaymentHashID     string           `json:"payment_hash_id"`
+	Channel           string           `json:"channel"` // paypal, stripe等
+	Amount            *decimal.Decimal `json:"amount"`
+	Currency          string           `json:"currency"`
+	ExternalOrderID   string           `json:"external_order_id"`
+	ExternalCaptureID string           `json:"external_capture_id,omitempty"`
+	BusinessContext   json.RawMessage  `json:"business_context"`
+	CompletedAt       time.Time        `json:"completed_at"`
+	AfterCommit       func(func())     `json:"-"`
 }

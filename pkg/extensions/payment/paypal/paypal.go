@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/flaboy/aira-core/pkg/database"
 	"github.com/flaboy/aira-shop/pkg/config"
@@ -76,20 +77,21 @@ func (p *PayPal) CreatePayment(businessContext interface{}, amount int64, curren
 		BusinessContext: contextJSON,
 	}
 
-	slog.Info("[PayPal CreatePayment] Created PaymentRecord with amount: %d", paymentRecord.Amount)
+	slog.Info("Created PayPal payment record", "amount", paymentRecord.Amount)
 
 	err = database.Database().Create(paymentRecord).Error
 	if err != nil {
 		return nil, fmt.Errorf("failed to create payment record: %w", err)
 	}
 
-	slog.Info("[PayPal CreatePayment] Saved PaymentRecord to DB - ID: %d, Amount: %d", paymentRecord.ID, paymentRecord.Amount)
+	slog.Info("Saved PayPal payment record", "payment_id", paymentRecord.ID, "amount", paymentRecord.Amount)
 
 	// 生成 payment hash ID
 	paymentHashID := utils.EncodePaymentID(paymentRecord.ID)
 
 	// 创建PayPal订单
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 	amountFloat := float64(amount) / 100 // 转换为元
 
 	// 构建购买单元
@@ -175,7 +177,7 @@ func (p *PayPal) handleCallback(c *pin.Context, path string) error {
 	// path 格式: "callback/{payment_hash_id}"
 	parts := strings.Split(path, "/")
 	if len(parts) < 2 {
-		slog.Info("PayPal callback invalid path: %s", path)
+		slog.Info("Invalid PayPal callback path")
 		return p.renderErrorPage(c, "Invalid callback URL")
 	}
 
@@ -185,49 +187,64 @@ func (p *PayPal) handleCallback(c *pin.Context, path string) error {
 	// 解码获取数据库ID
 	paymentID, err := utils.DecodePaymentHashID(paymentHashID)
 	if err != nil {
-		slog.Info("Failed to decode payment hash ID: %v", err)
+		slog.Info("Failed to decode payment hash ID", "error", err)
 		return p.renderErrorPage(c, "Invalid payment ID")
-	}
-
-	// 如果用户取消了支付
-	if action == "cancel" {
-		err := p.updatePaymentStatus(paymentID, "cancelled", "Payment cancelled by user")
-		if err != nil {
-			slog.Info("Failed to update payment status to cancelled: %v", err)
-		}
-		return p.renderErrorPage(c, "Payment was cancelled")
 	}
 
 	// 获取支付记录
 	var paymentRecord models.PaymentRecord
 	err = database.Database().Where("id = ?", paymentID).First(&paymentRecord).Error
 	if err != nil {
-		slog.Info("Failed to find payment record: %v", err)
+		slog.Info("Failed to find payment record", "error", err)
 		return p.renderErrorPage(c, "Payment record not found")
 	}
 
-	slog.Info("[PayPal Callback] Retrieved PaymentRecord - ID: %d, Amount: %d, Status: %s",
-		paymentRecord.ID, paymentRecord.Amount, paymentRecord.Status)
+	guard, err := utils.ResolveCaptureGuard(c.Request.Context(), paymentHashID, paymentRecord)
+	if paymentRecord.Status == "completed" {
+		if err == nil && guard != nil {
+			return p.renderGuardedResult(c, paymentHashID, types.PaymentSucceeded)
+		}
+		return p.renderSuccessPage(c, "Payment completed successfully")
+	}
+
+	if err != nil {
+		return p.renderErrorPage(c, "Payment could not be verified.")
+	}
+	if guard != nil {
+		return p.handleGuardedCapture(c, paymentHashID, action, &paymentRecord, guard)
+	}
+
+	// 如果用户取消了支付
+	if action == "cancel" {
+		err := p.updatePaymentStatus(paymentID, "cancelled", "Payment cancelled by user")
+		if err != nil {
+			slog.Info("Failed to update payment status to cancelled", "error", err)
+		}
+		return p.renderErrorPage(c, "Payment was cancelled")
+	}
+
+	slog.Info("Retrieved PayPal payment record",
+		"payment_id", paymentRecord.ID, "amount", paymentRecord.Amount, "status", paymentRecord.Status)
 
 	orderID := paymentRecord.ExternalOrderID
 	if orderID == "" {
-		slog.Info("PayPal order ID not found for payment %s", paymentHashID)
+		slog.Info("PayPal order ID not found", "payment_id", paymentHashID)
 		return p.renderErrorPage(c, "PayPal order not found")
 	}
 
 	// 获取PayPal订单详情验证状态
 	order, err := p.client.GetOrder(context.Background(), orderID)
 	if err != nil {
-		slog.Info("Failed to get PayPal order: %v", err)
+		slog.Info("Failed to get PayPal order", "error", err)
 		return p.renderErrorPage(c, "Failed to retrieve PayPal order")
 	}
 
 	// 检查订单状态
 	if order.Status != "APPROVED" {
-		slog.Info("PayPal order not approved, status: %s", order.Status)
+		slog.Info("PayPal order not approved", "status", order.Status)
 		err = p.updatePaymentStatus(paymentID, "failed", fmt.Sprintf("Order status: %s", order.Status))
 		if err != nil {
-			slog.Info("Failed to update payment status: %v", err)
+			slog.Info("Failed to update payment status", "error", err)
 		}
 		return p.renderErrorPage(c, fmt.Sprintf("Payment not approved, status: %s", order.Status))
 	}
@@ -235,20 +252,20 @@ func (p *PayPal) handleCallback(c *pin.Context, path string) error {
 	// 捕获支付
 	capture, err := p.client.CaptureOrder(context.Background(), orderID, paypal.CaptureOrderRequest{})
 	if err != nil {
-		slog.Info("Failed to capture PayPal payment: %v", err)
+		slog.Info("Failed to capture PayPal payment", "error", err)
 		err = p.updatePaymentStatus(paymentID, "failed", fmt.Sprintf("Capture failed: %v", err))
 		if err != nil {
-			slog.Info("Failed to update payment status: %v", err)
+			slog.Info("Failed to update payment status", "error", err)
 		}
 		return p.renderErrorPage(c, "Failed to capture payment")
 	}
 
 	// 检查捕获状态
 	if capture.Status != "COMPLETED" {
-		slog.Info("PayPal capture not completed, status: %s", capture.Status)
+		slog.Info("PayPal capture not completed", "status", capture.Status)
 		err = p.updatePaymentStatus(paymentID, "failed", fmt.Sprintf("Capture status: %s", capture.Status))
 		if err != nil {
-			slog.Info("Failed to update payment status: %v", err)
+			slog.Info("Failed to update payment status", "error", err)
 		}
 		return p.renderErrorPage(c, fmt.Sprintf("Payment capture incomplete, status: %s", capture.Status))
 	}
@@ -256,7 +273,7 @@ func (p *PayPal) handleCallback(c *pin.Context, path string) error {
 	// 处理成功的支付
 	err = p.processSuccessfulPayment(paymentID, orderID, &paymentRecord)
 	if err != nil {
-		slog.Info("Failed to process successful payment: %v", err)
+		slog.Info("Failed to process successful payment", "error", err)
 		return p.renderErrorPage(c, "Failed to process payment")
 	}
 
@@ -278,12 +295,11 @@ func (p *PayPal) updatePaymentStatus(paymentID uint, status, message string) err
 		"status": status,
 	}
 
-	err := database.Database().Model(&models.PaymentRecord{}).
-		Where("id = ?", paymentID).
-		Updates(updates).Error
-
-	if err != nil {
-		return err
+	result := database.Database().Model(&models.PaymentRecord{}).
+		Where("id = ? AND status <> ?", paymentID, "completed").
+		Updates(updates)
+	if result.Error != nil || result.RowsAffected == 0 {
+		return result.Error
 	}
 
 	if status == "failed" || status == "cancelled" {
@@ -292,7 +308,7 @@ func (p *PayPal) updatePaymentStatus(paymentID uint, status, message string) err
 		}
 	}
 
-	slog.Info("Updated payment %d status to %s", paymentID, status)
+	slog.Info("Updated PayPal payment status", "payment_id", paymentID, "status", status)
 	return nil
 }
 
@@ -310,12 +326,12 @@ func markWalletPaymentOrderFailed(db *gorm.DB, paymentID uint, message string) e
 
 // processSuccessfulPayment 处理成功的支付
 func (p *PayPal) processSuccessfulPayment(paymentID uint, orderID string, paymentRecord *models.PaymentRecord) error {
-	slog.Info("[PayPal ProcessSuccessful] Starting - paymentID: %d, amount: %d", paymentID, paymentRecord.Amount)
+	slog.Info("Processing PayPal payment", "payment_id", paymentID, "amount", paymentRecord.Amount)
 
 	return database.Database().Transaction(func(tx *gorm.DB) error {
 		// 确保支付记录尚未处理
 		if paymentRecord.Status == "completed" {
-			slog.Info("Payment %d already completed, skipping", paymentID)
+			slog.Info("PayPal payment already completed", "payment_id", paymentID)
 			return nil
 		}
 
@@ -328,14 +344,13 @@ func (p *PayPal) processSuccessfulPayment(paymentID uint, orderID string, paymen
 			return err
 		}
 
-		slog.Info("Successfully processed PayPal payment: paymentID=%d, orderID=%s, amount=%d",
-			paymentID, orderID, paymentRecord.Amount)
+		slog.Info("Processed PayPal payment", "payment_id", paymentID, "order_id", orderID, "amount", paymentRecord.Amount)
 
 		// 在通知业务系统前再次检查金额
-		slog.Info("[PayPal ProcessSuccessful] Before NotifyBusinessSystem - Amount: %d", paymentRecord.Amount)
+		slog.Info("Notifying business system for PayPal payment", "amount", paymentRecord.Amount)
 
 		if err := utils.NotifyBusinessSystem(tx, paymentRecord); err != nil {
-			slog.Info("Failed to notify business system: %v", err)
+			slog.Info("Failed to notify business system", "error", err)
 			return err
 		}
 

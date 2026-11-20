@@ -47,6 +47,10 @@ func ConvertIntToDecemel(v int64) *decimal.Decimal {
 // NotifyBusinessSystem 通知业务系统支付已完成
 // tx 为当前事务，如果传入nil则使用新事务
 func NotifyBusinessSystem(tx *gorm.DB, paymentRecord *models.PaymentRecord) error {
+	return NotifyBusinessSystemWithCapture(tx, paymentRecord, "", nil)
+}
+
+func NotifyBusinessSystemWithCapture(tx *gorm.DB, paymentRecord *models.PaymentRecord, captureID string, afterCommit func(func())) error {
 	slog.Info("[NotifyBusinessSystem] Starting notification", "paymentID", paymentRecord.ID, "amount", paymentRecord.Amount)
 
 	// 将业务上下文反序列化为JSON格式的RawMessage
@@ -57,13 +61,15 @@ func NotifyBusinessSystem(tx *gorm.DB, paymentRecord *models.PaymentRecord) erro
 
 	// 创建支付完成事件
 	event := &types.PaymentCompletedEvent{
-		TX:              tx,
-		PaymentHashID:   EncodePaymentID(paymentRecord.ID),
-		Channel:         paymentRecord.Channel,
-		Amount:          ConvertIntToDecemel(paymentRecord.Amount),
-		Currency:        paymentRecord.Currency,
-		ExternalOrderID: paymentRecord.ExternalOrderID,
-		BusinessContext: businessContextJSON,
+		TX:                tx,
+		PaymentHashID:     EncodePaymentID(paymentRecord.ID),
+		Channel:           paymentRecord.Channel,
+		Amount:            ConvertIntToDecemel(paymentRecord.Amount),
+		Currency:          paymentRecord.Currency,
+		ExternalOrderID:   paymentRecord.ExternalOrderID,
+		ExternalCaptureID: captureID,
+		AfterCommit:       afterCommit,
+		BusinessContext:   businessContextJSON,
 	}
 
 	slog.Info("[NotifyBusinessSystem] Created event", "amount", event.Amount.String())
